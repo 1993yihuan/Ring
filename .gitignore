@@ -1,0 +1,23 @@
+# 构建产物与缓存（可再生）
+build/
+.build/
+*.app
+*.log
+
+# 运行期用户配置
+data/
+
+# 系统与编辑器杂项
+.DS_Store
+*.xcuserstate
+
+# 内部过程记录：仅本机保留，不随仓库分发
+AGENTS.md
+DEVELOPMENT_PLAN.md
+docs/
+
+# 图标设计过程资料：仅本机保留，仓库只收选定源图与打包 icns
+assets/icon/*-design.md
+assets/icon/*-prompt.txt
+assets/icon/*-qa*.png
+assets/icon/*-validation.json
