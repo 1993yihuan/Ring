@@ -44,6 +44,8 @@
       <p class="eyebrow">RING FOR MACOS</p>
       <h1>双击 <span class="opt">Option</span>，即刻启动</h1>
       <p class="lede">开源免费的环形启动器，在光标处打开。</p>
+      <div class="hero-stage">
+      <div class="hero-tilt">
       <div class="hero" role="img" aria-label="环形启动器，共八个槽位。顶部微信图标带青色高光，环心写着微信；顺时针还有一个深色图标、Safari、邮件、音乐和备忘录，左侧两个槽位为空。">
         <svg class="ring-art" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
           <defs>
@@ -84,7 +86,7 @@
           <circle cx="200" cy="200" r="85.85" fill="none" stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="1.05"/>
 
           <!-- WeChat accent: a quiet wash on the band, clipped to the torus -->
-          <ellipse cx="200" cy="78" rx="58" ry="46" fill="url(#r-cyan)" mask="url(#r-torus)"/>
+          <ellipse class="r-cyan-wash" cx="200" cy="78" rx="58" ry="46" fill="url(#r-cyan)" mask="url(#r-torus)"/>
 
           <g transform="translate(72, 200)">
             <circle r="35.2" fill="#E7E2DA"/>
@@ -101,13 +103,15 @@
         </svg>
         <p class="ring-label">微信</p>
         <ul class="slots" aria-hidden="true">
-          <li class="slot" style="--a: 0deg"><img src="assets/icons/wechat.png" srcset="assets/icons/wechat.png 1x, assets/icons/wechat@2x.png 2x" alt="" width="256" height="256"></li>
-          <li class="slot" style="--a: 45deg"><img src="assets/icons/openbot.png" srcset="assets/icons/openbot.png 1x, assets/icons/openbot@2x.png 2x" alt="" width="256" height="256"></li>
-          <li class="slot" style="--a: 90deg"><img src="assets/icons/safari.png" srcset="assets/icons/safari.png 1x, assets/icons/safari@2x.png 2x" alt="" width="256" height="256"></li>
-          <li class="slot" style="--a: 135deg"><img src="assets/icons/mail.png" srcset="assets/icons/mail.png 1x, assets/icons/mail@2x.png 2x" alt="" width="256" height="256"></li>
-          <li class="slot" style="--a: 180deg"><img src="assets/icons/music.png" srcset="assets/icons/music.png 1x, assets/icons/music@2x.png 2x" alt="" width="256" height="256"></li>
-          <li class="slot" style="--a: 225deg"><img src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 0deg; --i: 0"><span class="slot-inner"><img src="assets/icons/wechat.png" srcset="assets/icons/wechat.png 1x, assets/icons/wechat@2x.png 2x" alt="" width="256" height="256"></span></li>
+          <li class="slot" style="--a: 45deg; --i: 1"><span class="slot-inner"><img src="assets/icons/openbot.png" srcset="assets/icons/openbot.png 1x, assets/icons/openbot@2x.png 2x" alt="" width="256" height="256"></span></li>
+          <li class="slot" style="--a: 90deg; --i: 2"><span class="slot-inner"><img src="assets/icons/safari.png" srcset="assets/icons/safari.png 1x, assets/icons/safari@2x.png 2x" alt="" width="256" height="256"></span></li>
+          <li class="slot" style="--a: 135deg; --i: 3"><span class="slot-inner"><img src="assets/icons/mail.png" srcset="assets/icons/mail.png 1x, assets/icons/mail@2x.png 2x" alt="" width="256" height="256"></span></li>
+          <li class="slot" style="--a: 180deg; --i: 4"><span class="slot-inner"><img src="assets/icons/music.png" srcset="assets/icons/music.png 1x, assets/icons/music@2x.png 2x" alt="" width="256" height="256"></span></li>
+          <li class="slot" style="--a: 225deg; --i: 5"><span class="slot-inner"><img src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="256" height="256"></span></li>
         </ul>
+      </div>
+      </div>
       </div>
       <div class="downloads" id="download">
         <a class="btn btn-primary" href="https://github.com/1993yihuan/Ring/releases/download/v0.1.2/Ring-0.1.2-apple-silicon.dmg">下载 Apple 芯片版</a>
@@ -115,5 +119,45 @@
       </div>
       <p class="fine">0.1.2 · macOS 13 及更高 · 开源免费 · 首次打开需在系统设置中允许</p>
     </main>
+  
+    <script>
+      (function () {
+        var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var stage = document.querySelector(".hero-stage");
+        var tilt = document.querySelector(".hero-tilt");
+        if (reduce || !stage || !tilt) return;
+
+        var targetX = 0, targetY = 0, curX = 0, curY = 0;
+        var max = 5;
+        var main = document.querySelector("main");
+
+        function onMove(e) {
+          var r = stage.getBoundingClientRect();
+          var dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+          var dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+          if (dx > 1) dx = 1; else if (dx < -1) dx = -1;
+          if (dy > 1) dy = 1; else if (dy < -1) dy = -1;
+          targetX = dx * max;
+          targetY = -dy * max;
+        }
+        function onLeave() {
+          targetX = 0;
+          targetY = 0;
+        }
+
+        window.addEventListener("mousemove", onMove, { passive: true });
+        if (main) main.addEventListener("mouseleave", onLeave);
+
+        function tick() {
+          curX += (targetX - curX) * 0.12;
+          curY += (targetY - curY) * 0.12;
+          if (Math.abs(curX) < 0.01 && Math.abs(targetX) === 0) curX = 0;
+          if (Math.abs(curY) < 0.01 && Math.abs(targetY) === 0) curY = 0;
+          tilt.style.transform = "rotateY(" + curX.toFixed(3) + "deg) rotateX(" + curY.toFixed(3) + "deg)";
+          requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick);
+      })();
+    </script>
   </body>
 </html>
