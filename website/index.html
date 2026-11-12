@@ -44,17 +44,70 @@
       <p class="eyebrow">RING FOR MACOS</p>
       <h1>双击 <span class="opt">Option</span>，即刻启动</h1>
       <p class="lede">在光标所在之处，打开八个槽位的环形启动器。</p>
-      <div class="hero">
-        <picture>
-          <source srcset="assets/hero.webp" type="image/webp">
-          <img
-            src="assets/hero.png"
-            width="860"
-            height="770"
-            alt="磨砂玻璃环形启动器，共八个槽位。顶部微信图标带青色高光，环心写着微信；顺时针还有一个深色图标、Safari、邮件、音乐和备忘录，左侧两个槽位为空。"
-            fetchpriority="high"
-            decoding="async">
-        </picture>
+      <div class="hero" role="img" aria-label="环形启动器，共八个槽位。顶部微信图标带青色高光，环心写着微信；顺时针还有一个深色图标、Safari、邮件、音乐和备忘录，左侧两个槽位为空。">
+        <svg class="ring-art" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <defs>
+            <linearGradient id="r-fill" x1="0.32" y1="0" x2="0.68" y2="1">
+              <stop offset="0%" stop-color="#F6F2EC"/>
+              <stop offset="48%" stop-color="#EEE9E1"/>
+              <stop offset="100%" stop-color="#E3DDD4"/>
+            </linearGradient>
+            <filter id="r-grain" x="0" y="0" width="100%" height="100%">
+              <feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="2" seed="3" result="n"/>
+              <feColorMatrix type="saturate" values="0" in="n" result="g"/>
+              <feComponentTransfer in="g">
+                <feFuncA type="table" tableValues="0 0.055"/>
+              </feComponentTransfer>
+            </filter>
+            <mask id="r-torus" maskUnits="userSpaceOnUse">
+              <rect width="400" height="400" fill="black"/>
+              <circle cx="200" cy="200" r="172" fill="white"/>
+              <circle cx="200" cy="200" r="84" fill="black"/>
+            </mask>
+            <radialGradient id="r-cyan" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#8FDCEA" stop-opacity="0.55"/>
+              <stop offset="55%" stop-color="#8FDCEA" stop-opacity="0.18"/>
+              <stop offset="100%" stop-color="#8FDCEA" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+
+          <g mask="url(#r-torus)">
+            <rect width="400" height="400" fill="url(#r-fill)"/>
+            <rect width="400" height="400" filter="url(#r-grain)"/>
+          </g>
+
+          <!-- outer bezel: dark hairline + inner light hairline -->
+          <circle cx="200" cy="200" r="172" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
+          <circle cx="200" cy="200" r="170.2" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="1.05"/>
+          <!-- inner bezel -->
+          <circle cx="200" cy="200" r="84" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
+          <circle cx="200" cy="200" r="85.85" fill="none" stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="1.05"/>
+
+          <!-- WeChat accent: a quiet wash on the band, clipped to the torus -->
+          <ellipse cx="200" cy="78" rx="58" ry="46" fill="url(#r-cyan)" mask="url(#r-torus)"/>
+
+          <g transform="translate(72, 200)">
+            <circle r="35.2" fill="#E7E2DA"/>
+            <circle r="35.2" fill="none" stroke="#BDB7AE" stroke-width="1.15"/>
+            <circle r="34.05" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="0.9"/>
+            <path d="M-7.6 0h15.2M0-7.6v15.2" fill="none" stroke="#8A8580" stroke-width="1.65" stroke-linecap="round"/>
+          </g>
+          <g transform="translate(109.49, 109.49)">
+            <circle r="35.2" fill="#E7E2DA"/>
+            <circle r="35.2" fill="none" stroke="#BDB7AE" stroke-width="1.15"/>
+            <circle r="34.05" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="0.9"/>
+            <path d="M-7.6 0h15.2M0-7.6v15.2" fill="none" stroke="#8A8580" stroke-width="1.65" stroke-linecap="round"/>
+          </g>
+        </svg>
+        <p class="ring-label">微信</p>
+        <ul class="slots" aria-hidden="true">
+          <li class="slot" style="--a: 0deg"><img src="assets/icons/wechat.png" srcset="assets/icons/wechat.png 1x, assets/icons/wechat@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 45deg"><img src="assets/icons/openbot.png" srcset="assets/icons/openbot.png 1x, assets/icons/openbot@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 90deg"><img src="assets/icons/safari.png" srcset="assets/icons/safari.png 1x, assets/icons/safari@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 135deg"><img src="assets/icons/mail.png" srcset="assets/icons/mail.png 1x, assets/icons/mail@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 180deg"><img src="assets/icons/music.png" srcset="assets/icons/music.png 1x, assets/icons/music@2x.png 2x" alt="" width="256" height="256"></li>
+          <li class="slot" style="--a: 225deg"><img src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="256" height="256"></li>
+        </ul>
       </div>
       <div class="downloads" id="download">
         <a class="btn btn-primary" href="https://github.com/1993yihuan/Ring/releases/download/v0.1.2/Ring-0.1.2-apple-silicon.dmg">下载 Apple 芯片版</a>

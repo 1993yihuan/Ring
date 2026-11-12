@@ -150,14 +150,73 @@ h1 .opt {
 }
 
 .hero {
+  /* 8 equal slots on the mid-band of a 400×400 ring:
+     outer r=172, inner r=84, mid r=128. Icons and plus
+     wells share that circle, 45° apart, WeChat at 0°. */
+  --slot-cx: 50%;
+  --slot-cy: 50%;
+  --slot-r: 0.32;
+  --slot-icon: 0.158;
+  position: relative;
   width: var(--ring);
-  margin: 14px 0 0;
+  aspect-ratio: 1;
+  margin: 22px 0 22px;
+  overflow: visible;
 }
 
-.hero img {
+.ring-art {
   display: block;
   width: 100%;
   height: auto;
+  overflow: visible;
+  filter:
+    drop-shadow(0 14px 24px rgba(48, 42, 36, 0.10))
+    drop-shadow(0 3px 6px rgba(48, 42, 36, 0.05));
+}
+
+.ring-label {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: 0;
+  transform: translate(-50%, -50%);
+  font-family: "Noto Sans SC", sans-serif;
+  font-size: calc(var(--ring) * 0.042);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-indent: 0.12em;
+  color: #4a4744;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.slots {
+  position: absolute;
+  inset: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  pointer-events: none;
+}
+
+.slot {
+  position: absolute;
+  left: var(--slot-cx);
+  top: var(--slot-cy);
+  width: calc(var(--ring) * var(--slot-icon));
+  height: calc(var(--ring) * var(--slot-icon));
+  transform:
+    translate(-50%, -50%)
+    rotate(var(--a))
+    translateY(calc(var(--ring) * var(--slot-r) * -1))
+    rotate(calc(-1 * var(--a)));
+}
+
+.slot img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  filter: drop-shadow(0 1px 1.2px rgba(23, 23, 22, 0.12));
 }
 
 .downloads {
@@ -285,7 +344,8 @@ h1 .opt {
   }
 
   .hero {
-    margin-top: -2px;
+    margin-top: 18px;
+    margin-bottom: 18px;
   }
 
   .downloads {
