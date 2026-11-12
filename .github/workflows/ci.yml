@@ -3,7 +3,9 @@
 # Runner: macos-26 (Apple Silicon), the current GitHub-hosted macOS 26 image.
 # Package.swift requires Swift tools 6.0. README verification is Xcode 26.3 /
 # Swift 6.2.4. That Xcode is installed on the image but is not the default
-# (default is 26.6), so DEVELOPER_DIR selects it. /usr/bin/swift honors it.
+# (default is 26.6). Select it with xcode-select and DEVELOPER_DIR. The
+# Xcode 26.3 bundle does not expose an executable at Contents/Developer/usr/bin/swift;
+# xcrun swift is the toolchain entry point.
 name: CI
 
 on:
@@ -29,12 +31,21 @@ jobs:
       - name: Select Xcode 26.3
         run: |
           set -euo pipefail
-          if [[ ! -x "${DEVELOPER_DIR}/usr/bin/swift" ]]; then
-            echo "Xcode 26.3 is not installed at ${DEVELOPER_DIR}" >&2
+          app="/Applications/Xcode_26.3.app"
+          if [[ ! -d "$app" ]]; then
+            echo "Xcode 26.3 is not installed at ${app}" >&2
             ls /Applications | grep -i Xcode || true
             exit 1
           fi
+          sudo xcode-select -s "$app"
+          echo "xcode-select: $(xcode-select -p)"
           xcodebuild -version
+          xcodebuild -version | grep -q 'Xcode 26\.3'
+          xcrun --find swift
+          xcrun swift --version
+          xcrun swift --version | grep -q 'Apple Swift version 6\.2'
+          # scripts/test.sh and scripts/build.sh invoke `swift` on PATH.
+          command -v swift
           swift --version
           swift --version | grep -q 'Apple Swift version 6\.2'
 

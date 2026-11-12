@@ -7,8 +7,9 @@
 # workflow does not call notarytool, import a certificate, or read any secret
 # other than the default GITHUB_TOKEN (contents: write creates the Release).
 #
-# Runner and toolchain match CI: macos-26 with Xcode 26.3 selected. The image
-# can compile this package (Swift tools 6.0, deployment target macOS 13.0).
+# Runner and toolchain match CI: macos-26 with Xcode 26.3 selected via
+# xcode-select and DEVELOPER_DIR. The image can compile this package
+# (Swift tools 6.0, deployment target macOS 13.0).
 name: Release
 
 on:
@@ -48,12 +49,21 @@ jobs:
       - name: Select Xcode 26.3
         run: |
           set -euo pipefail
-          if [[ ! -x "${DEVELOPER_DIR}/usr/bin/swift" ]]; then
-            echo "Xcode 26.3 is not installed at ${DEVELOPER_DIR}" >&2
+          app="/Applications/Xcode_26.3.app"
+          if [[ ! -d "$app" ]]; then
+            echo "Xcode 26.3 is not installed at ${app}" >&2
             ls /Applications | grep -i Xcode || true
             exit 1
           fi
+          sudo xcode-select -s "$app"
+          echo "xcode-select: $(xcode-select -p)"
           xcodebuild -version
+          xcodebuild -version | grep -q 'Xcode 26\.3'
+          xcrun --find swift
+          xcrun swift --version
+          xcrun swift --version | grep -q 'Apple Swift version 6\.2'
+          # scripts/test.sh and scripts/build.sh invoke `swift` on PATH.
+          command -v swift
           swift --version
           swift --version | grep -q 'Apple Swift version 6\.2'
 
