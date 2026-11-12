@@ -1,0 +1,53 @@
+# Pull-request tests only. Publishing stays in release.yml.
+#
+# Runner: macos-26 (Apple Silicon), the current GitHub-hosted macOS 26 image.
+# Package.swift requires Swift tools 6.0. README verification is Xcode 26.3 /
+# Swift 6.2.4. That Xcode is installed on the image but is not the default
+# (default is 26.6). Select it with xcode-select and DEVELOPER_DIR. The
+# Xcode 26.3 bundle does not expose an executable at Contents/Developer/usr/bin/swift;
+# xcrun swift is the toolchain entry point.
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          app="/Applications/Xcode_26.3.app"
+          if [[ ! -d "$app" ]]; then
+            echo "Xcode 26.3 is not installed at ${app}" >&2
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$app"
+          echo "xcode-select: $(xcode-select -p)"
+          xcodebuild -version
+          xcodebuild -version | grep -q 'Xcode 26\.3'
+          xcrun --find swift
+          xcrun swift --version
+          xcrun swift --version | grep -q 'Apple Swift version 6\.2'
+          # scripts/test.sh and scripts/build.sh invoke `swift` on PATH.
+          command -v swift
+          swift --version
+          swift --version | grep -q 'Apple Swift version 6\.2'
+
+      - name: Unit tests
+        run: ./scripts/test.sh

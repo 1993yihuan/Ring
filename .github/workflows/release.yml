@@ -1,0 +1,135 @@
+# Package build/Ring.app and publish it on GitHub Releases.
+#
+# Cut a release by pushing a tag such as v1.0.0 after the commit is on main.
+# workflow_dispatch re-runs the same job; choose that tag as the workflow ref.
+#
+# Signing stays ad-hoc. scripts/build.sh runs `codesign --sign -`. This
+# workflow does not call notarytool, import a certificate, or read any secret
+# other than the default GITHUB_TOKEN (contents: write creates the Release).
+#
+# Runner and toolchain match CI: macos-26 with Xcode 26.3 selected via
+# xcode-select and DEVELOPER_DIR. The image can compile this package
+# (Swift tools 6.0, deployment target macOS 13.0).
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require a version tag
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          if [[ ! "$tag" =~ ^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*$ ]]; then
+            echo "Refusing to publish '${tag}'." >&2
+            echo "Push a tag like v1.0.0, or run this workflow from that tag." >&2
+            echo "Current ref: ${GITHUB_REF}" >&2
+            exit 1
+          fi
+
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          app="/Applications/Xcode_26.3.app"
+          if [[ ! -d "$app" ]]; then
+            echo "Xcode 26.3 is not installed at ${app}" >&2
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          sudo xcode-select -s "$app"
+          echo "xcode-select: $(xcode-select -p)"
+          xcodebuild -version
+          xcodebuild -version | grep -q 'Xcode 26\.3'
+          xcrun --find swift
+          xcrun swift --version
+          xcrun swift --version | grep -q 'Apple Swift version 6\.2'
+          # scripts/test.sh and scripts/build.sh invoke `swift` on PATH.
+          command -v swift
+          swift --version
+          swift --version | grep -q 'Apple Swift version 6\.2'
+
+      - name: Unit tests
+        run: ./scripts/test.sh
+
+      - name: Build Ring.app
+        run: ./scripts/build.sh
+
+      - name: Check output-path guard
+        run: ./scripts/test-output-guard.sh
+
+      - name: Package and publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          app="build/Ring.app"
+          archive="${RUNNER_TEMP}/Ring-${version}-macos.zip"
+
+          # ditto keeps the bundle layout and the ad-hoc signature.
+          # A plain zip can break either one.
+          rm -f "$archive"
+          ditto -c -k --keepParent "$app" "$archive"
+
+          unpack="${RUNNER_TEMP}/ring-unpack"
+          rm -rf "$unpack"
+          mkdir -p "$unpack"
+          ditto -x -k "$archive" "$unpack"
+          codesign --verify --strict "$unpack/Ring.app"
+          signature="$(codesign -dv "$unpack/Ring.app" 2>&1)"
+          printf '%s\n' "$signature"
+          printf '%s\n' "$signature" | grep -q 'Signature=adhoc'
+          archs="$(lipo -archs "$unpack/Ring.app/Contents/MacOS/Ring")"
+          echo "packaged archs: ${archs}"
+          case "$archs" in
+            *x86_64*arm64*|*arm64*x86_64*) ;;
+            *)
+              echo "Expected a Universal 2 binary (x86_64 and arm64), got: ${archs}" >&2
+              exit 1
+              ;;
+          esac
+
+          notes="${RUNNER_TEMP}/release-notes.md"
+          cat > "$notes" <<EOF
+          Ring ${version} for macOS (Universal 2).
+
+          This build is ad-hoc signed only. It is not notarized, and it is not Developer ID signed. macOS Gatekeeper will block the first launch until you allow the app yourself.
+
+          1. Unzip the download in Finder (double-click the zip) so the app bundle and the ad-hoc signature stay intact. You should get \`Ring.app\`.
+          2. Move \`Ring.app\` to the Applications folder if you want it there.
+          3. The first launch may be blocked. Then use either of these:
+             - System Settings → Privacy & Security → Open Anyway
+             - or right-click the app and choose Open, then confirm Open
+          4. Input Monitoring is a separate permission. After Gatekeeper lets the app open, use the menu bar command to request Input Monitoring, then enable Ring under System Settings → Privacy & Security → Input Monitoring. Quit and reopen Ring if macOS asks you to.
+
+          此构建只做了 ad-hoc 签名，没有公证。第一次打开可能被 Gatekeeper 拦截。请到「系统设置 → 隐私与安全性」点「仍要打开」，或在访达里右键 Ring.app 选择「打开」。放行之后仍需单独授予「输入监控」权限。
+          EOF
+
+          title="Ring ${version}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$archive" --clobber
+            gh release edit "$tag" --title "$title" --notes-file "$notes"
+          else
+            gh release create "$tag" "$archive" --title "$title" --notes-file "$notes"
+          fi
+          gh release view "$tag" --json url,tagName,assets
