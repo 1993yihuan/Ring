@@ -16,6 +16,11 @@ AGENTS.md
 DEVELOPMENT_PLAN.md
 docs/
 
+# 界面设计稿与生成过程资料：仅本机保留
+#
+# design/ 下是两稿概念图、提示词与校验记录，不属于可运行项目。
+design/
+
 # 图标设计过程资料：仅本机保留，仓库只收选定源图与打包 icns
 assets/icon/*-design.md
 assets/icon/*-prompt.txt

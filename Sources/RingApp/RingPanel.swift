@@ -17,13 +17,22 @@ final class RingPanel: NSPanel {
         isMovable = false
         isReleasedWhenClosed = false
         animationBehavior = .none
-        ignoresMouseEvents = false
-        // Without this the panel never receives mouseMoved and hover names stay blank.
-        acceptsMouseMovedEvents = true
     }
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
+}
+
+private enum RingPalette {
+    /// The one accent in the ring: a local cyan-blue on the hovered slot.
+    static let accent = NSColor(srgbRed: 0.09, green: 0.58, blue: 0.78, alpha: 1)
+    static let plateTint = NSColor.white.withAlphaComponent(0.20)
+    static let plateEdge = NSColor.white.withAlphaComponent(0.55)
+    static let tile = NSColor.white.withAlphaComponent(0.55)
+    static let tileEdge = NSColor.black.withAlphaComponent(0.07)
+    static let hoverFill = NSColor(srgbRed: 0.09, green: 0.58, blue: 0.78, alpha: 0.18)
+    static let primary = NSColor.black.withAlphaComponent(0.82)
+    static let secondary = NSColor.black.withAlphaComponent(0.45)
 }
 
 final class RingView: NSView {
@@ -35,118 +44,133 @@ final class RingView: NSView {
 
     var geometry: RingGeometry?
     var items: [Item] = []
-    var hoveredIndex: Int?
-    var onSelect: ((Int) -> Void)?
-    var onCancel: (() -> Void)?
+    /// The whole pointer decision, pushed by the coordinator: the highlight and the
+    /// centre copy are two facts of one value, so the view cannot pair a name with the
+    /// wrong verb.
+    var decision: RingPointerDecision? {
+        didSet {
+            guard oldValue != decision else { return }
+            needsDisplay = true
+        }
+    }
 
-    private var trackingAreaRef: NSTrackingArea?
-
+    private var hoveredIndex: Int? { decision?.slot }
     override var isFlipped: Bool { false }
 
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let trackingAreaRef { removeTrackingArea(trackingAreaRef) }
-        let area = NSTrackingArea(rect: bounds,
-                                  options: [.activeAlways, .mouseMoved, .mouseEnteredAndExited],
-                                  owner: self,
-                                  userInfo: nil)
-        addTrackingArea(area)
-        trackingAreaRef = area
-    }
+
 
     override func draw(_ dirtyRect: NSRect) {
         NSColor.clear.setFill()
         dirtyRect.fill()
         guard let geometry else { return }
-        drawBackdrop(geometry: geometry)
+        drawPlate(geometry: geometry)
+        drawCentre(geometry: geometry)
+        drawIcons(geometry: geometry)
+    }
 
+    private func drawPlate(geometry: RingGeometry) {
+        let path = NSBezierPath(ovalIn: geometry.plateRect)
+        RingPalette.plateTint.setFill()
+        path.fill()
+        RingPalette.plateEdge.setStroke()
+        path.lineWidth = 1
+        path.stroke()
+    }
+
+    /// The centre is the cancel target, so it always says that; a hovered slot replaces
+    /// the empty state with its real name and what a click does.
+    private func drawCentre(geometry: RingGeometry) {
+        let centre = CGPoint(x: bounds.midX, y: bounds.midY)
+        let side = geometry.cancelFrame.width
+        let disc = NSRect(x: centre.x - side / 2, y: centre.y - side / 2, width: side, height: side)
+        NSColor.white.withAlphaComponent(0.20).setFill()
+        NSBezierPath(ovalIn: disc.insetBy(dx: 3, dy: 3)).fill()
+
+        // Type and offsets follow the disc: when the ring shrinks to fit a small screen
+        // the three lines stay inside it instead of running into the icons.
+        let scale = min(1, max(0.5, side / 96))
+        let text = decision.map {
+            RingCenter.text(for: $0, names: items.map(\.name), filled: items.map(\.isFilled))
+        } ?? RingCenter.text(for: .none, launches: false)
+        let width = min(side + 12, max(side - 8, 90))
+        if let title = text.title {
+            drawCentred(title,
+                        font: titleFont(fitting: title, width: width, scale: scale),
+                        color: RingPalette.primary,
+                        in: NSRect(x: centre.x - width / 2,
+                                   y: centre.y + 3 * scale,
+                                   width: width,
+                                   height: 18 * scale))
+        }
+        if let action = text.action {
+            drawCentred(action,
+                        font: .systemFont(ofSize: 11 * scale),
+                        color: RingPalette.accent,
+                        in: NSRect(x: centre.x - width / 2,
+                                   y: centre.y - 15 * scale,
+                                   width: width,
+                                   height: 15 * scale))
+        }
+        drawCentred(RingCenterText.escapeHint,
+                    font: .systemFont(ofSize: 10 * scale),
+                    color: RingPalette.secondary,
+                    in: NSRect(x: centre.x - width / 2,
+                               y: centre.y - 32 * scale,
+                               width: width,
+                               height: 14 * scale))
+    }
+
+    /// A long app name gets a smaller size before it is cut, because a truncated name
+    /// the user cannot identify is worse than a slightly smaller one.
+    private func titleFont(fitting title: String, width: CGFloat, scale: CGFloat) -> NSFont {
+        let large = NSFont.systemFont(ofSize: 13 * scale, weight: .semibold)
+        let small = NSFont.systemFont(ofSize: 11 * scale, weight: .semibold)
+        if title.size(withAttributes: [.font: large]).width <= width { return large }
+        return small
+    }
+
+    private func drawCentred(_ text: String, font: NSFont, color: NSColor, in rect: NSRect) {
+        let style = NSMutableParagraphStyle()
+        style.alignment = .center
+        style.lineBreakMode = .byTruncatingTail
+        (text as NSString).draw(in: rect, withAttributes: [.font: font,
+                                                          .foregroundColor: color,
+                                                          .paragraphStyle: style])
+    }
+
+    private func drawIcons(geometry: RingGeometry) {
+        let centre = CGPoint(x: bounds.midX, y: bounds.midY)
         for (index, frame) in geometry.iconFrames.enumerated() {
             let item = index < items.count ? items[index] : Item(name: "", icon: nil, isFilled: false)
-            let iconFrame = frame.insetBy(dx: 3, dy: 3)
-            let path = NSBezierPath(ovalIn: iconFrame)
-            (index == hoveredIndex ? NSColor.controlAccentColor.withAlphaComponent(0.28) : NSColor.white.withAlphaComponent(0.10)).setFill()
+            let isHovered = index == hoveredIndex
+            let tile = RingGlyph.tileRect(hitFrame: frame, centre: centre, isHovered: isHovered)
+            let path = NSBezierPath(ovalIn: tile)
+            (isHovered ? RingPalette.hoverFill : RingPalette.tile).setFill()
             path.fill()
-            NSColor.white.withAlphaComponent(0.22).setStroke()
-            path.lineWidth = 1
+            (isHovered ? RingPalette.accent : RingPalette.tileEdge).setStroke()
+            path.lineWidth = isHovered ? 1.5 : 1
             path.stroke()
 
+            let inner = tile.insetBy(dx: 7, dy: 7)
             if let icon = item.icon {
-                icon.draw(in: iconFrame.insetBy(dx: 6, dy: 6),
+                icon.draw(in: inner,
                           from: .zero,
                           operation: .sourceOver,
                           fraction: item.isFilled ? 1 : 0.35,
                           respectFlipped: true,
                           hints: nil)
             } else {
-                let symbol = NSImage(systemSymbolName: "plus", accessibilityDescription: "添加应用")
-                symbol?.draw(in: iconFrame.insetBy(dx: 14, dy: 14))
+                let plus = "＋" as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: NSFont.systemFont(ofSize: max(12, inner.width * 0.7), weight: .light),
+                    .foregroundColor: RingPalette.secondary
+                ]
+                let size = plus.size(withAttributes: attributes)
+                plus.draw(at: CGPoint(x: inner.midX - size.width / 2,
+                                      y: inner.midY - size.height / 2),
+                          withAttributes: attributes)
             }
         }
-
-        if let hoveredIndex, hoveredIndex < items.count, !items[hoveredIndex].name.isEmpty {
-            let name = items[hoveredIndex].name
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: NSFont.systemFont(ofSize: 12, weight: .medium),
-                .foregroundColor: NSColor.white
-            ]
-            let size = name.size(withAttributes: attributes)
-            let labelRect = NSRect(x: (bounds.width - size.width) / 2,
-                                   y: geometry.labelFrame.minY + 2,
-                                   width: size.width,
-                                   height: size.height)
-            NSColor.black.withAlphaComponent(0.55).setFill()
-            NSBezierPath(roundedRect: labelRect.insetBy(dx: -8, dy: -3), xRadius: 6, yRadius: 6).fill()
-            name.draw(at: labelRect.origin, withAttributes: attributes)
-        }
     }
 
-    private func drawBackdrop(geometry: RingGeometry) {
-        let body = NSRect(x: 0,
-                          y: geometry.labelFrame.maxY,
-                          width: bounds.width,
-                          height: bounds.height - geometry.labelFrame.maxY)
-        let inset = body.insetBy(dx: 4, dy: 4)
-        let path = NSBezierPath(roundedRect: inset, xRadius: 26, yRadius: 26)
-        NSColor.black.withAlphaComponent(0.62).setFill()
-        path.fill()
-        NSColor.white.withAlphaComponent(0.14).setStroke()
-        path.lineWidth = 1
-        path.stroke()
-    }
-
-    override func mouseMoved(with event: NSEvent) {
-        updateHover(at: convert(event.locationInWindow, from: nil))
-    }
-
-    override func mouseExited(with event: NSEvent) {
-        hoveredIndex = nil
-        needsDisplay = true
-    }
-
-    override func mouseDown(with event: NSEvent) {
-        guard let geometry else { return }
-        let point = convert(event.locationInWindow, from: nil)
-        let screenPoint = window?.convertPoint(toScreen: event.locationInWindow) ?? point
-        switch RingLayout.hitTest(geometry, screenPoint: screenPoint) {
-        case .slot(let index):
-            onSelect?(index)
-        case .cancel, .empty:
-            onCancel?()
-        case .outside:
-            break
-        }
-    }
-
-    private func updateHover(at point: NSPoint) {
-        guard let geometry else { return }
-        var newIndex: Int?
-        if let index = geometry.iconFrames.firstIndex(where: { $0.contains(point) }) {
-            newIndex = index
-        }
-        if newIndex != hoveredIndex {
-            hoveredIndex = newIndex
-            needsDisplay = true
-        }
-        NSCursor.pointingHand.set()
-    }
 }

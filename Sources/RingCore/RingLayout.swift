@@ -5,22 +5,16 @@ public struct RingMetrics: Sendable, Equatable {
     public var iconSize: CGFloat
     public var iconSpacing: CGFloat
     public var padding: CGFloat
-    public var labelHeight: CGFloat
-    public var minIconSize: CGFloat
     /// Below this the ring stays usable by shrinking, but icons get hard to hit.
     public var hardMinIconSize: CGFloat
 
     public init(iconSize: CGFloat = 52,
                 iconSpacing: CGFloat = 8,
                 padding: CGFloat = 14,
-                labelHeight: CGFloat = 20,
-                minIconSize: CGFloat = 26,
                 hardMinIconSize: CGFloat = 8) {
         self.iconSize = iconSize
         self.iconSpacing = iconSpacing
         self.padding = padding
-        self.labelHeight = labelHeight
-        self.minIconSize = minIconSize
         self.hardMinIconSize = hardMinIconSize
     }
 }
@@ -32,10 +26,19 @@ public struct RingGeometry: Sendable, Equatable {
     public var iconFrames: [CGRect]
     /// Panel-local cancel target (the middle of the ring).
     public var cancelFrame: CGRect
-    /// Panel-local area used for the hovered slot name.
-    public var labelFrame: CGRect
     public var iconSize: CGFloat
     public var isMinimal: Bool
+
+    /// The circular plate inside the square panel, in panel-local coordinates. The blur
+    /// mask, its corner radius and the drawn edge all come from this one rect.
+    public var plateRect: CGRect {
+        let inset: CGFloat = 5
+        let side = min(panelFrame.width, panelFrame.height) - inset * 2
+        return CGRect(x: (panelFrame.width - side) / 2,
+                      y: (panelFrame.height - side) / 2,
+                      width: side,
+                      height: side)
+    }
 
     public func contains(_ screenPoint: CGPoint) -> Bool {
         panelFrame.contains(screenPoint)
@@ -54,12 +57,25 @@ public enum RingHit: Sendable, Equatable {
 }
 
 public enum RingLayout {
+    /// One half-open containment rule for frames `[minX, maxX) × [minY, maxY)`: a point on
+    /// the shared edge of two adjacent screens belongs to exactly one of them.
+    public static func frameContains(_ frame: CGRect, _ point: CGPoint) -> Bool {
+        point.x >= frame.minX && point.x < frame.maxX && point.y >= frame.minY && point.y < frame.maxY
+    }
+
+    /// Unit vector from the ring centre to a slot, y pointing up. Slot 1 sits at the
+    /// top and the order runs clockwise, so slot numbers in the settings list, the
+    /// settings preview and the real ring all mean the same position.
+    public static func slotOffset(_ slot: Int, count: Int) -> CGPoint {
+        let step = 2 * CGFloat.pi / CGFloat(max(count, 1))
+        let angle = CGFloat.pi / 2 - CGFloat(slot) * step
+        return CGPoint(x: cos(angle), y: sin(angle))
+    }
+
     /// Screen whose frame contains the point; falls back to the nearest screen.
     public static func screenIndex(for point: CGPoint, screens: [CGRect]) -> Int? {
         guard !screens.isEmpty else { return nil }
-        if let index = screens.firstIndex(where: { screen in
-            point.x >= screen.minX && point.x < screen.maxX && point.y >= screen.minY && point.y < screen.maxY
-        }) {
+        if let index = screens.firstIndex(where: { frameContains($0, point) }) {
             return index
         }
         var best: (index: Int, distance: CGFloat)?
@@ -108,29 +124,27 @@ public enum RingLayout {
                                iconSize: CGFloat,
                                metrics: RingMetrics) -> RingGeometry? {
         let count = max(slotCount, 1)
-        let step = 2 * CGFloat.pi / CGFloat(count)
         let scale = iconSize / metrics.iconSize
         let spacing = max(2, metrics.iconSpacing * scale)
         let padding = max(3, metrics.padding * scale)
-        let labelHeight = iconSize >= metrics.minIconSize ? metrics.labelHeight : 0
         let radius: CGFloat = count == 1
             ? iconSize * 0.8
             : (iconSize + spacing) / (2 * sin(CGFloat.pi / CGFloat(count)))
         let body = 2 * radius + iconSize + padding * 2
-        let size = CGSize(width: body, height: body + labelHeight)
+        let size = CGSize(width: body, height: body)
         guard size.width <= visible.width, size.height <= visible.height else { return nil }
 
         let clampedX = min(max(mouse.x - size.width / 2, visible.minX), visible.maxX - size.width)
         let clampedY = min(max(mouse.y - size.height / 2, visible.minY), visible.maxY - size.height)
         let panelFrame = CGRect(origin: CGPoint(x: clampedX, y: clampedY), size: size)
 
-        let center = CGPoint(x: body / 2, y: labelHeight + body / 2)
+        let center = CGPoint(x: body / 2, y: body / 2)
         var iconFrames: [CGRect] = []
         iconFrames.reserveCapacity(count)
         for slot in 0..<count {
-            let angle = -CGFloat.pi / 2 + CGFloat(slot) * step
-            let iconCenter = CGPoint(x: center.x + cos(angle) * radius,
-                                     y: center.y + sin(angle) * radius)
+            let offset = slotOffset(slot, count: count)
+            let iconCenter = CGPoint(x: center.x + offset.x * radius,
+                                     y: center.y + offset.y * radius)
             iconFrames.append(CGRect(x: iconCenter.x - iconSize / 2,
                                      y: iconCenter.y - iconSize / 2,
                                      width: iconSize,
@@ -142,15 +156,10 @@ public enum RingLayout {
                                  y: center.y - cancelSide / 2,
                                  width: cancelSide,
                                  height: cancelSide)
-        let labelFrame = CGRect(x: padding,
-                                y: 0,
-                                width: body - padding * 2,
-                                height: labelHeight)
 
         return RingGeometry(panelFrame: panelFrame,
                             iconFrames: iconFrames,
                             cancelFrame: cancelFrame,
-                            labelFrame: labelFrame,
                             iconSize: iconSize,
                             isMinimal: false)
     }
@@ -163,5 +172,19 @@ public enum RingLayout {
         }
         if geometry.cancelFrame.contains(local) { return .cancel }
         return .empty
+    }
+}
+
+public enum RingGlyph {
+    /// The disc drawn inside one icon's hit frame. The hovered disc grows and lifts away
+    /// from the centre but stays inside the frame, so no visible pixel is unclickable and
+    /// nothing is clipped by the panel.
+    public static func tileRect(hitFrame: CGRect, centre: CGPoint, isHovered: Bool) -> CGRect {
+        guard isHovered else { return hitFrame.insetBy(dx: 6, dy: 6) }
+        let tile = hitFrame.insetBy(dx: 3, dy: 3)
+        let dx = tile.midX - centre.x
+        let dy = tile.midY - centre.y
+        let length = max((dx * dx + dy * dy).squareRoot(), 1)
+        return tile.offsetBy(dx: dx / length * 2, dy: dy / length * 2)
     }
 }

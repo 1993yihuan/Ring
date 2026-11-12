@@ -1,29 +1,25 @@
+import AppKit
 import CoreGraphics
 import Foundation
-
-enum PermissionState: Equatable {
-    case ready
-    case unknown
-    case denied
-
-    var summary: String {
-        switch self {
-        case .ready: return "输入监控权限：已授予"
-        case .unknown: return "输入监控权限：未检查"
-        case .denied: return "输入监控权限：未授予，全局双击 Option 不可用"
-        }
-    }
-}
+import RingCore
 
 enum InputMonitorPermission {
-    static func current() -> PermissionState {
-        if CGPreflightListenEventAccess() { return .ready }
-        return .denied
+    /// Passive check only. Never prompts.
+    static var listenAccess: ListenAccess {
+        CGPreflightListenEventAccess() ? .granted : .notGranted
     }
 
-    /// Only called from an explicit user action; never on launch.
-    static func requestFromUserAction() -> PermissionState {
-        let granted = CGRequestListenEventAccess()
-        return granted ? .ready : .denied
+    /// Only called from an explicit user action. The SDK documents this as requesting
+    /// access "potentially prompting", so a false return with no dialog is possible and
+    /// must produce visible guidance instead of silence.
+    @discardableResult
+    static func requestFromUserAction() -> ListenAccess {
+        CGRequestListenEventAccess() ? .granted : .notGranted
+    }
+
+    /// Returns false when the system refused to open the pane, so the caller can say so.
+    static func openInputMonitoringSettings() -> Bool {
+        guard let url = URL(string: InputMonitoringSettings.urlString) else { return false }
+        return NSWorkspace.shared.open(url)
     }
 }

@@ -9,11 +9,16 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var recognizer = OptionDoubleTapRecognizer()
     private let session = RingSession()
     private let panel = RingPanel()
+    private let overlay = RingOverlayPanel()
+    private var overlayView: RingOverlayView?
+    /// The screen the ring was opened on: the only place a click may launch or cancel.
+    private var activeScreenFrame: CGRect?
+    private let panelContainer = NSView()
+    private let panelBlur = NSVisualEffectView()
     private var ringView: RingView?
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
     private var statusItem: NSStatusItem?
-    private var permissionState: PermissionState = .unknown
     private var store: SlotStore?
 
     private func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
@@ -32,9 +37,21 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             NSLog("Ring: 配置读取失败，使用空配置：%@", "\(error)")
         }
 
-        permissionState = InputMonitorPermission.current()
         buildStatusItem()
         installMonitor()
+    }
+
+    /// Coming back from System Settings refreshes the state and retries the listener once
+    /// access exists. Nothing happens when it is already running, so the tap is not
+    /// reinstalled on every activation.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        refreshPermissionStatus()
+        let followUp = PermissionFeedback.followUp(access: currentStatus.access,
+                                                   listenerRunning: monitor.isRunning,
+                                                   windowVisible: settingsWindowVisible)
+        if followUp.reinstallMonitor {
+            installMonitor()
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -46,13 +63,13 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private func installMonitor() {
         monitor.onEvent = { [weak self] event in self?.handle(event) }
         monitor.onEscape = { [weak self] in self?.cancelRing() }
-        monitor.onMouseDown = { [weak self] in self?.handleMouseDown() }
+        monitor.onMouseDown = { [weak self] point in self?.handleMouseDown(at: point) }
         monitor.onTick = { [weak self] time in self?.handleTick(time) }
         monitor.onHealthChange = { [weak self] health in self?.healthChanged(health) }
         if !monitor.start() {
             NSLog("Ring: 全局监听不可用，可用菜单栏手动打开环形")
         }
-        refreshPermissionSummary()
+        refreshPermissionStatus()
     }
 
     private func handle(_ event: InputEvent) {
@@ -70,10 +87,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// Classified in RingCore so the hidden case cannot be lost again: a press while
     /// hidden must break a pending double tap; inside the panel it belongs to the
     /// panel; outside it dismisses and passes through (the tap is listen-only).
-    private func handleMouseDown() {
+    private func handleMouseDown(at point: CGPoint?) {
+        guard let point else {
+            // The event's own location is unknown: never classify a click by a stale
+            // pointer position, just dismiss (a no-op when the ring is hidden).
+            cancelRing()
+            return
+        }
+        // The overlay owns clicks on the ring's screen; only clicks elsewhere cancel here.
         let action = RingInteraction.mouseDownAction(isRingVisible: session.isVisible,
-                                                     panelFrame: panel.frame,
-                                                     mouse: NSEvent.mouseLocation)
+                                                     activeScreenFrame: activeScreenFrame,
+                                                     mouse: point)
         switch action {
         case .resetRecognizer:
             recognizer.reset()
@@ -91,7 +115,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func healthChanged(_ health: GlobalOptionMonitor.Health) {
-        refreshPermissionSummary()
+        refreshPermissionStatus()
         if health == .tapDisabled {
             statusItem?.button?.toolTip = "Ring：全局监听已被系统停用，可在设置中重试"
         }
@@ -101,20 +125,28 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func showRing() {
         guard session.trigger() else { return }
-        guard let geometry = currentGeometry() else {
+        guard let current = currentGeometry() else {
             session.cancel()
             NSLog("Ring: 当前屏幕区域无法容纳环形")
             return
         }
-        presentPanel(geometry: geometry)
+        activeScreenFrame = current.frame
+        presentPanel(geometry: current.geometry)
+        presentOverlay(on: current.frame)
     }
 
-    private func currentGeometry() -> RingGeometry? {
+    /// The screen under the pointer at open time decides both where the ring is drawn and
+    /// which screen may launch: another screen never starts anything.
+    private func currentGeometry() -> (frame: CGRect, geometry: RingGeometry)? {
         let screens = NSScreen.screens
-        return RingLayout.geometry(slotCount: session.slots.count,
-                                   mouse: NSEvent.mouseLocation,
-                                   screens: screens.map(\.frame),
-                                   visibleFrames: screens.map(\.visibleFrame))
+        let mouse = NSEvent.mouseLocation
+        let frames = screens.map(\.frame)
+        guard let index = RingLayout.screenIndex(for: mouse, screens: frames),
+              let geometry = RingLayout.geometry(slotCount: session.slots.count,
+                                                 mouse: mouse,
+                                                 screens: frames,
+                                                 visibleFrames: screens.map(\.visibleFrame)) else { return nil }
+        return (screens[index].frame, geometry)
     }
 
     private func presentPanel(geometry: RingGeometry) {
@@ -125,15 +157,79 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                           icon: slot.app.map { NSWorkspace.shared.icon(forFile: $0.path) },
                           isFilled: slot.app != nil)
         }
-        view.hoveredIndex = nil
-        view.onSelect = { [weak self] index in self?.selectSlot(index) }
-        view.onCancel = { [weak self] in self?.cancelRing() }
+        view.decision = nil
         ringView = view
 
-        panel.contentView = view
         panel.setFrame(geometry.panelFrame, display: true)
+        if panel.contentView !== panelContainer {
+            // A real frosted plate instead of a flat fill: the light material sits
+            // behind the ring so the ring reads as lightweight over any wallpaper.
+            panelBlur.material = .popover
+            panelBlur.blendingMode = .behindWindow
+            panelBlur.state = .active
+            panelBlur.wantsLayer = true
+            panelBlur.layer?.masksToBounds = true
+            panelBlur.appearance = NSAppearance(named: .aqua)
+            panelContainer.addSubview(panelBlur)
+            view.autoresizingMask = [.width, .height]
+            panelContainer.addSubview(view)
+            panel.contentView = panelContainer
+        }
+        panelContainer.frame = NSRect(origin: .zero, size: geometry.panelFrame.size)
+        // A corner radius of half the side makes the circle; the tint and edge the view
+        // draws use the same rect from the geometry.
+        let plate = geometry.plateRect
+        panelBlur.frame = plate
+        panelBlur.layer?.cornerRadius = plate.width / 2
+        view.frame = panelContainer.bounds
         panel.orderFrontRegardless()
         view.needsDisplay = true
+    }
+
+    // MARK: - Screen-wide selection
+
+    /// The ring's screen becomes the input surface. It draws nothing: the visible ring
+    /// keeps the geometry RingLayout gave it, and the panel never activates Ring.
+    private func presentOverlay(on screenFrame: CGRect) {
+        let view = overlayView ?? RingOverlayView()
+        view.reset()
+        view.onMove = { [weak self] point in self?.pointerMoved(to: point) }
+        view.onRelease = { [weak self] point in self?.pointerClicked(at: point) }
+        view.onCancelRelease = { [weak self] in self?.cancelRing() }
+        view.onAbortedPress = { [weak self] in self?.cancelRing() }
+        view.onPointerExit = { [weak self] in self?.clearHighlight() }
+        overlay.contentView = view
+        overlay.setFrame(screenFrame, display: false)
+        overlayView = view
+        overlay.orderFrontRegardless()
+        view.frame = NSRect(origin: .zero, size: screenFrame.size)
+    }
+
+    private func pointerMoved(to point: CGPoint) {
+        guard let decision = currentDecision(at: point) else { return }
+        ringView?.decision = decision
+    }
+
+    private func pointerClicked(at point: CGPoint) {
+        guard let decision = currentDecision(at: point) else { return }
+        switch decision.action {
+        case .launch(let index):
+            selectSlot(index)
+        case .cancel:
+            cancelRing()
+        case .otherScreen:
+            break
+        }
+    }
+
+    private func currentDecision(at point: CGPoint) -> RingPointerDecision? {
+        guard let geometry = ringView?.geometry, let screenFrame = activeScreenFrame else { return nil }
+        let filled = session.slots.map { $0.app != nil }
+        return RingPointer.decide(point, activeScreenFrame: screenFrame, geometry: geometry, filled: filled)
+    }
+
+    private func clearHighlight() {
+        ringView?.decision = nil
     }
 
     private func selectSlot(_ index: Int) {
@@ -161,7 +257,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func hidePanel() {
         panel.orderOut(nil)
-        ringView?.hoveredIndex = nil
+        overlay.orderOut(nil)
+        ringView?.decision = nil
+        activeScreenFrame = nil
     }
 
     private func presentErrorAlert(_ message: String) {
@@ -183,6 +281,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "请求输入监控权限", action: #selector(requestPermission), keyEquivalent: ""))
+        menu.addItem(NSMenuItem(title: "打开系统设置（输入监控）", action: #selector(openInputMonitoringSettingsFromMenu), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重试全局监听", action: #selector(retryMonitor), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 Ring", action: #selector(quit), keyEquivalent: "q"))
@@ -191,17 +290,41 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
         item.menu = menu
         statusItem = item
-        refreshPermissionSummary()
+        refreshPermissionStatus()
     }
 
-    private func refreshPermissionSummary() {
-        permissionState = InputMonitorPermission.current()
+    /// One place turns API state plus listener health into what the user sees.
+    private var currentStatus: PermissionStatus {
+        let listener: ListenerHealth
+        switch monitor.health {
+        case .running: listener = .running
+        case .stopped: listener = .stopped
+        case .needsPermission, .tapDisabled: listener = .failed
+        }
+        return PermissionStatus(access: InputMonitorPermission.listenAccess, listener: listener)
+    }
+
+    private func refreshPermissionStatus() {
+        let status = currentStatus
         let menu = statusItem?.menu
         if let healthItem = menu?.items.first(where: { $0.title.hasPrefix("手动打开环形") }) {
             healthItem.title = monitor.isRunning ? "手动打开环形（布局验证）" : "手动打开环形（监听不可用）"
         }
-        statusItem?.button?.toolTip = permissionState.summary
-        settingsModel?.permissionSummary = permissionState.summary
+        statusItem?.button?.toolTip = status.headline
+        settingsModel?.apply(status: status)
+        fitSettingsWindow()
+    }
+
+    /// The permission text can be longer after the window exists (a result message adds
+    /// up to ~64pt), so the window is grown to the content instead of trusting the height
+    /// it was created with.
+    private func fitSettingsWindow() {
+        guard let window = settingsWindow,
+              let content = window.contentViewController?.view else { return }
+        content.layoutSubtreeIfNeeded()
+        let needed = content.fittingSize
+        guard needed.height > window.contentLayoutRect.height + 0.5 else { return }
+        window.setContentSize(needed)
     }
 
     @objc private func manualShow() {
@@ -213,17 +336,56 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     @objc private func retryMonitor() {
+        retryListener()
+    }
+
+    /// Retrying never grants access, and never tears down a tap that is already running.
+    private func retryListener() {
         recognizer.reset()
         session.cancel()
         hidePanel()
-        installMonitor()
+        let wasRunning = monitor.isRunning
+        if !wasRunning {
+            installMonitor()
+        }
+        settingsModel?.report(retryResult: currentStatus, listenerWasRunning: wasRunning)
+        fitSettingsWindow()
     }
 
+    /// Explicit user action. Always produces a visible answer: granted, still missing,
+    /// or the pane could not be opened.
     @objc private func requestPermission() {
-        permissionState = InputMonitorPermission.requestFromUserAction()
-        refreshPermissionSummary()
-        if permissionState == .ready {
+        let access = InputMonitorPermission.requestFromUserAction()
+        let followUp = PermissionFeedback.followUp(access: access,
+                                                   listenerRunning: monitor.isRunning,
+                                                   windowVisible: settingsWindowVisible)
+        // Never rebuild a tap that is already running; only a missing one needs starting.
+        if followUp.reinstallMonitor {
             installMonitor()
+        }
+        refreshPermissionStatus()
+        // A closed window keeps its model, so checking the model alone would hide the
+        // result. The choice is made in RingCore where it is tested.
+        if followUp.showSettingsWindow {
+            openSettings()
+        }
+        settingsModel?.report(requestResult: currentStatus, accessAfterRequest: access)
+        fitSettingsWindow()
+    }
+
+    private var settingsWindowVisible: Bool {
+        guard let window = settingsWindow else { return false }
+        return window.isVisible
+    }
+
+    @objc private func openInputMonitoringSettingsFromMenu() {
+        openInputMonitoringSettings()
+    }
+
+    private func openInputMonitoringSettings() {
+        if !InputMonitorPermission.openInputMonitoringSettings() {
+            settingsModel?.report(openSettingsFailed: true)
+            presentErrorAlert("无法打开系统设置。请手动打开“系统设置 → 隐私与安全性 → 输入监控”，勾选 Ring。")
         }
     }
 
@@ -237,24 +399,26 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             }
             let model = SettingsModel(config: session.config,
                                      store: store,
-                                     permissionSummary: permissionState.summary)
+                                     status: currentStatus)
             model.onConfigChange = { [weak self] config in
                 self?.session.update(config: config)
             }
             model.onRefreshPermission = { [weak self] in
-                self?.refreshPermissionSummary()
-                return InputMonitorPermission.current().summary
+                guard let self else { return }
+                self.refreshPermissionStatus()
             }
-            model.onRequestPermission = { [weak self] in
-                self?.requestPermission()
-                return InputMonitorPermission.current().summary
-            }
+            model.onRequestPermission = { [weak self] in self?.requestPermission() }
+            model.onRetryListener = { [weak self] in self?.retryListener() }
+            model.onOpenInputMonitoringSettings = { [weak self] in self?.openInputMonitoringSettings() }
             settingsModel = model
             let hosting = NSHostingController(rootView: SettingsView(model: model))
+            hosting.view.layoutSubtreeIfNeeded()
             let window = NSWindow(contentViewController: hosting)
             window.title = "Ring 设置"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
+            window.contentView?.layoutSubtreeIfNeeded()
+            window.setContentSize(hosting.view.fittingSize)
             window.center()
             settingsWindow = window
         }

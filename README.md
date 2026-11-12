@@ -9,11 +9,15 @@ macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置�
 ## 当前状态
 
 - 已完成：触发识别、环形显示与命中、8 槽位配置与持久化、应用启动与错误反馈、菜单栏与设置窗口、权限状态与显式请求、Universal 2 构建。
-- 未验证：真实双击 Option、环形焦点与点击穿透、输入监控权限授予、Esc 与外部点击透传、多屏与缩放。这些都必须在真实 macOS 上用键鼠完成，自动测试无法替代。
+- 已完成（选择与点击）：环形在打开时所在屏幕绘制，鼠标方向决定高亮的槽位，环心显示该槽位的应用名。圆外同一屏幕任意位置单击按角度启动高亮槽；环内图标单击启动自己；环心、空槽取消；图标之间的间隙只做方向高亮，单击取消。其他屏幕的点击一律不启动。
+- 已完成（界面）：圆形浅色磨砂环、唯一悬停项青蓝强调、设置窗口左侧八方位预览加右侧八行列表、独立权限卡。槽位编号统一为顶部 1、顺时针到 8。
+- 未验证：真实双击 Option、悬停与单击在真实 WindowServer 下的表现、输入监控权限授予、多屏与缩放。这些都必须在真实 macOS 上用键鼠完成，自动测试无法替代。
 
 ## 下载
 
-预构建的 Universal 2 应用在 [GitHub Releases](https://github.com/1993yihuan/Ring/releases)，文件名类似 `Ring-1.0.0-macos.zip`。压缩包由 `ditto -c -k --keepParent` 生成，用来保住 `Ring.app` 的包结构和 ad-hoc 签名。请在访达里双击 zip 解压。
+预构建的 Universal 2 应用在 [GitHub Releases](https://github.com/1993yihuan/Ring/releases)，文件名类似 `Ring-1.0.0-macos.zip`。
+
+目前只有 `v0.1.0` 一个包。它在引入这两个工作流的那个提交上构建，之前的两次提交只改了工作流与 README，业务代码与首个提交相同。因此这个包不包含下面「当前状态」里新增的按角度选择、环外单击启动和权限状态修复。压缩包由 `ditto -c -k --keepParent` 生成，用来保住 `Ring.app` 的包结构和 ad-hoc 签名。请在访达里双击 zip 解压。
 
 这个包的签名方式是 ad-hoc：可以下载安装，macOS Gatekeeper 仍会在第一次打开时拦截，需要下载者自己放行。放行 Gatekeeper 之后，输入监控权限还要单独授予，两者不是同一项授权。
 
@@ -40,7 +44,7 @@ Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionStr
 在项目根目录执行：
 
 ```bash
-./scripts/test.sh          # 55 个单元测试，日志写 build/test.log
+./scripts/test.sh          # 99 个单元测试，日志写 build/test.log
 ./scripts/test-output-guard.sh   # 构建输出目录校验（项目外路径必须被拒绝）
 ./scripts/build.sh         # Universal 2 产物：build/Ring.app
 ```
@@ -59,12 +63,13 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 
 1. 运行 ./scripts/build.sh，确认 build/Ring.app 存在。
 2. 打开一次：open build/Ring.app。菜单栏出现虚线圆图标。
-3. 菜单栏 → 请求输入监控权限。系统提示后到「系统设置 → 隐私与安全性 → 输入监控」勾选 Ring；若提示需重开，退出后再次执行 open build/Ring.app。
-4. 菜单栏 → 设置…，点任意槽位的「选择…」挑选一个 .app，关闭窗口（改动立即保存到 data/configuration.json）。
+3. 菜单栏 → 请求输入监控权限。设置窗口显示当前结果；监听未启动时可点「重试监听」。若没看到系统弹窗，打开「系统设置 → 隐私与安全性 → 输入监控」勾选 Ring，回到 Ring 会自动刷新并重试监听。
+4. 菜单栏 → 设置…，在右侧八行列表里点「添加…／替换…」挑选一个 .app（改动立即保存到 data/configuration.json，「保存」可再写一次）。左侧预览与列表编号同序：顶部为 1，顺时针到 8。
 5. 切到任意其他应用，快速双击同一侧 Option（左或右，两侧不能混），在第二次松键后环形出现在鼠标处并保持。
-6. 移动鼠标到图标上（显示名称），点击一次打开该应用，环形关闭。
-7. 取消：Esc、点击环形中心的空白、或点击面板外部。
-8. 未取得权限时，用菜单栏「手动打开环形（布局验证）」检查布局与启动；这不算核心链路通过。
+6. 移动鼠标改变方向：对应槽位局部青蓝强调，环心显示该应用名。
+7. 启动：在环外同一屏幕任意位置单击，或直接点击环内图标。
+8. 取消：Esc、点击环心空白、点击空槽，或点击图标之间的间隙。其他屏幕的点击不启动。
+9. 未取得权限时，用菜单栏「手动打开环形（布局验证）」检查布局与启动；这不算核心链路通过。
 
 ## 数据与日志位置
 
@@ -75,9 +80,11 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 ## 已知限制
 
 - **Apple Silicon 原生运行未验证**：arm64 slice 已编译、链接并通过 lipo 核对，但本机是 Intel，无法运行该 slice。不得用 Rosetta 或切片检查代替实机验收。
-- 真实键鼠行为未验证：双击 Option、松键保持、环形命中、Esc 与外部点击透传、普通 Option 组合键不误触、焦点不夺走。
-- 输入监控权限的授予、拒绝与恢复未在本机实测。
-- 多显示器、负坐标、混合缩放、全屏 Space 与 Stage Manager 未实测；纯函数布局测试只覆盖几何计算。
+- 真实键鼠行为未验证：双击 Option、松键保持、按角度悬停与单击、点击是否落后台应用、Esc 取消、普通 Option 组合键不误触、焦点不夺走。
+- 透明区域命中与整屏覆盖未验证：当前屏幕由一块覆盖层接管输入，圆外点击能否稳定穿过 WindowServer 的透明区、覆盖层是否影响其他窗口，都需要真实设备确认。
+- 本轮界面的观感未目视验收：毛玻璃材质、青蓝悬停、中心文案与设置弹窗 8 行是否全可见，都只在离屏编译与纯函数层面确认，未在真实屏幕上查看。
+- 输入监控权限的授予、拒绝与恢复未在本机实测；设置里的「打开系统设置」只验证到 URL 与目标面板标识符存在，真实跳转未验证。
+- 多显示器、负坐标、混合缩放、全屏 Space 与 Stage Manager 未实测；其他屏幕的点击不启动也只由纯函数规则保证。
 - 睡眠/唤醒、Secure Input、远程键盘未实测。
 - 签名只有 ad-hoc。可以从 Releases 下载，Gatekeeper 会拦截，直到按「下载」一节自行放行。发布流程按此限制，只使用 ad-hoc 签名。
 
@@ -86,7 +93,7 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 ```
 Sources/RingCore/     纯逻辑：双击识别、布局命中、配置与存储、会话状态、路径解析
 Sources/RingApp/      AppKit/SwiftUI：全局监听、面板、设置、菜单栏、启动器
-Tests/RingCoreTests/  55 个单元测试
+Tests/RingCoreTests/  99 个单元测试
 Packaging/Info.plist  bundle 元数据
 scripts/              test.sh、build.sh、make-icon.sh
 .github/workflows/    拉取请求跑测试；推送 vX.Y.Z 标签时打包并发布

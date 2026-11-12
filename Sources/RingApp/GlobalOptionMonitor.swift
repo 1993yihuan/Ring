@@ -25,7 +25,7 @@ final class GlobalOptionMonitor {
     var onEscape: (() -> Void)?
     /// Mouse presses are reported separately: a press inside the Ring panel belongs
     /// to the panel, a press outside it means the user clicked away.
-    var onMouseDown: (() -> Void)?
+    var onMouseDown: ((CGPoint?) -> Void)?
     var onTick: ((TimeInterval) -> Void)?
     var onHealthChange: ((Health) -> Void)?
 
@@ -105,6 +105,16 @@ final class GlobalOptionMonitor {
         onHealthChange?(newHealth)
     }
 
+    /// The click's location in AppKit screen coordinates (y up, the space RingPointer
+    /// uses), or nil when AppKit cannot turn this event into an NSEvent.
+    ///
+    /// Exactly one conversion lives here: no second, hand-rolled y-axis flip is mixed in,
+    /// so the two coordinate systems cannot disagree. A nil answer means "unknown", and
+    /// the caller must not fall back to a later pointer reading.
+    static func mousePoint(of event: CGEvent) -> CGPoint? {
+        NSEvent(cgEvent: event)?.locationInWindow
+    }
+
     private func handle(type: CGEventType, event: CGEvent) {
         switch type {
         case .tapDisabledByTimeout:
@@ -129,7 +139,11 @@ final class GlobalOptionMonitor {
             }
             emit(.interference)
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
-            DispatchQueue.main.async { [weak self] in self?.onMouseDown?() }
+            // Snapshot the event's own location: reading NSEvent.mouseLocation inside the
+            // async block would describe where the pointer is when it runs, not where the
+            // click happened.
+            let point = Self.mousePoint(of: event)
+            DispatchQueue.main.async { [weak self] in self?.onMouseDown?(point) }
         default:
             break
         }
