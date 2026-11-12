@@ -1,0 +1,42 @@
+# Pull-request tests only. Publishing stays in release.yml.
+#
+# Runner: macos-26 (Apple Silicon), the current GitHub-hosted macOS 26 image.
+# Package.swift requires Swift tools 6.0. README verification is Xcode 26.3 /
+# Swift 6.2.4. That Xcode is installed on the image but is not the default
+# (default is 26.6), so DEVELOPER_DIR selects it. /usr/bin/swift honors it.
+name: CI
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Select Xcode 26.3
+        run: |
+          set -euo pipefail
+          if [[ ! -x "${DEVELOPER_DIR}/usr/bin/swift" ]]; then
+            echo "Xcode 26.3 is not installed at ${DEVELOPER_DIR}" >&2
+            ls /Applications | grep -i Xcode || true
+            exit 1
+          fi
+          xcodebuild -version
+          swift --version
+          swift --version | grep -q 'Apple Swift version 6\.2'
+
+      - name: Unit tests
+        run: ./scripts/test.sh
