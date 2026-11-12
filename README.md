@@ -17,12 +17,12 @@ macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置�
 
 ## 下载
 
-当前应用版本是 0.1.2。推送标签 `v0.1.2` 后，[GitHub Releases](https://github.com/1993yihuan/Ring/releases) 上该版本的附件是两个压缩 DMG，没有 zip。磁盘卷顶层是 `Ring.app`：
+当前应用版本是 0.1.3。推送标签 `v0.1.3` 后，[GitHub Releases](https://github.com/1993yihuan/Ring/releases) 上该版本的附件是两个压缩 DMG，没有 zip。磁盘卷顶层是 `Ring.app`：
 
-- `Ring-0.1.2-intel.dmg`：Intel Mac，可执行文件只有 x86_64。
-- `Ring-0.1.2-apple-silicon.dmg`：Apple Silicon / M 系列 Mac，可执行文件只有 arm64。
+- `Ring-0.1.3-intel.dmg`：Intel Mac，可执行文件只有 x86_64。
+- `Ring-0.1.3-apple-silicon.dmg`：Apple Silicon / M 系列 Mac，可执行文件只有 arm64。
 
-文件名里的版本来自标签（`v0.1.2` → `0.1.2`），不是写死的旧版本号。查看机型：苹果菜单 → 关于本机。芯片显示 Apple M1、M2、M3、M4 或更新时，下载 Apple Silicon 那个 DMG。处理器显示 Intel 时，下载 Intel 那个 DMG。arm64 包不能在 Intel Mac 上运行。
+文件名里的版本来自标签（`v0.1.3` → `0.1.3`），不是写死的旧版本号。查看机型：苹果菜单 → 关于本机。芯片显示 Apple M1、M2、M3、M4 或更新时，下载 Apple Silicon 那个 DMG。处理器显示 Intel 时，下载 Intel 那个 DMG。arm64 包不能在 Intel Mac 上运行。
 
 签名是 ad-hoc（`codesign --sign -`）：可以下载安装，没有 Developer ID，也没有公证。macOS Gatekeeper 会在第一次打开时拦截，需要下载者自己放行。放行 Gatekeeper 之后，输入监控权限还要单独授予，两者不是同一项授权。
 
@@ -34,13 +34,13 @@ macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置�
    - 在访达中右键 `Ring.app`（或按住 Control 点按），选择「打开」，并在对话框里确认打开（right-click the app and choose Open）。
 5. 菜单栏 → 请求输入监控权限，再到「系统设置 → 隐私与安全性 → 输入监控」勾选 Ring。若系统要求重开，退出后再次打开。这一步与上面的 Gatekeeper 放行无关，装好之后仍然需要。
 
-已有的 `v0.1.0` Release 和它的 `Ring-0.1.0-macos.zip` 保持原样，本流程不重打、不移动、不删除那个 Release。那个 zip 是更早提交打的 Universal 2 包，不包含下面「当前状态」里的按角度选择、环外单击启动和权限状态修复。
+已有的 `v0.1.0` Release 和它的 `Ring-0.1.0-macos.zip` 保持原样，本流程不重打、不移动、不删除那个 Release。已有的 `v0.1.2` Release 和它的两个 DMG（`Ring-0.1.2-intel.dmg`、`Ring-0.1.2-apple-silicon.dmg`）同样保持原样，不重打标签、不修改。那个 zip 是更早提交打的 Universal 2 包，不包含下面「当前状态」里的按角度选择、环外单击启动和权限状态修复。
 
-发布：把要发布的提交合并进 `main` 后，在该提交上推送形如 `v0.1.2` 的标签（`v` 加主版本、次版本、修订号）。GitHub Actions 用标签名去掉前缀 `v` 作为版本，运行 `./scripts/test.sh` 和 `./scripts/test-output-guard.sh`，再由 `scripts/package-dmg.sh` 分别以 `RING_ARCHS=x86_64` 与 `RING_ARCHS=arm64` 调用 `./scripts/build.sh`。每次都是 ad-hoc 签名。脚本用 `ditto` 把 `Ring.app` 拷进临时目录，再执行 `hdiutil create -volname Ring -srcfolder <该目录> -format UDZO`，因此卷内顶层是完整的 `Ring.app`，而不是把 zip 再包进 DMG。随后单独挂载每个 DMG，执行 `codesign --verify --strict`，确认输出里有 `Signature=adhoc`，并用 `lipo -archs` 确认可执行文件恰好是这一种架构；多出来的切片或签名不符都会让任务失败。上传文件只有 `Ring-<version>-intel.dmg` 和 `Ring-<version>-apple-silicon.dmg`。若这个标签自己已经有 Release，会用 `--clobber` 覆盖同名 DMG，并删掉该标签上其余附件（包括 `Ring-<version>-macos.zip`）。不会改其他标签。要重跑同一次发布时，在 Actions 的 Release 工作流里选中这个标签再手动运行。
+发布：把要发布的提交合并进 `main` 后，在该提交上推送形如 `v0.1.3` 的标签（`v` 加主版本、次版本、修订号）。GitHub Actions 用标签名去掉前缀 `v` 作为版本，运行 `./scripts/test.sh` 和 `./scripts/test-output-guard.sh`，再由 `scripts/package-dmg.sh` 分别以 `RING_ARCHS=x86_64` 与 `RING_ARCHS=arm64` 调用 `./scripts/build.sh`。每次都是 ad-hoc 签名。脚本用 `ditto` 把 `Ring.app` 拷进临时目录，再执行 `hdiutil create -volname Ring -srcfolder <该目录> -format UDZO`，因此卷内顶层是完整的 `Ring.app`，而不是把 zip 再包进 DMG。随后单独挂载每个 DMG，执行 `codesign --verify --strict`，确认输出里有 `Signature=adhoc`，并用 `lipo -archs` 确认可执行文件恰好是这一种架构；多出来的切片或签名不符都会让任务失败。上传文件只有 `Ring-<version>-intel.dmg` 和 `Ring-<version>-apple-silicon.dmg`。若这个标签自己已经有 Release，会用 `--clobber` 覆盖同名 DMG，并删掉该标签上其余附件（包括 `Ring-<version>-macos.zip`）。不会改其他标签。要重跑同一次发布时，在 Actions 的 Release 工作流里选中这个标签再手动运行。
 
 发布 runner 是 GitHub 托管的 `macos-26`（Apple Silicon，当前的 `macos-latest`）。2026-11 的镜像软件清单包含 Xcode 26.3（`/Applications/Xcode_26.3.app`），默认 Xcode 则是 26.6。工作流把 `DEVELOPER_DIR` 指到 26.3，与下面已验证的 Xcode 26.3 / Swift 6.2.4 对齐。`Package.swift` 要求 Swift tools 6.0，部署目标是 macOS 13.0，公开 runner 上的这个 Xcode 可以编译。本机记录仍是 Intel 上的 macOS 26.5.1；Actions 在 Apple Silicon 上按架构分别编译，挂载 DMG 后核对 `lipo -archs`，不启动应用。
 
-Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionString`（目前是 0.1.2，`CFBundleVersion` 是 2）。标签名不会自动写进这个字段；希望两者一致时，推送标签前先改 plist。
+Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionString`（目前是 0.1.3，`CFBundleVersion` 是 3）。标签名不会自动写进这个字段；希望两者一致时，推送标签前先改 plist。
 
 ## 环境要求
 
