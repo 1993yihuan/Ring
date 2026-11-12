@@ -8,31 +8,37 @@ macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置�
 
 ## 当前状态
 
-- 已完成：触发识别、环形显示与命中、8 槽位配置与持久化、应用启动与错误反馈、菜单栏与设置窗口、权限状态与显式请求、Universal 2 构建。
+- 已完成：触发识别、环形显示与命中、8 槽位配置与持久化、应用启动与错误反馈、菜单栏与设置窗口、权限状态与显式请求、Universal 2 本地构建。GitHub Release 按架构各发布一个 DMG。
 - 已完成（选择与点击）：环形在打开时所在屏幕绘制，鼠标方向决定高亮的槽位，环心显示该槽位的应用名。圆外同一屏幕任意位置单击按角度启动高亮槽；环内图标单击启动自己；环心、空槽取消；图标之间的间隙只做方向高亮，单击取消。其他屏幕的点击一律不启动。
 - 已完成（界面）：圆形浅色磨砂环、唯一悬停项青蓝强调、设置窗口左侧八方位预览加右侧八行列表、独立权限卡。槽位编号统一为顶部 1、顺时针到 8。
 - 未验证：真实双击 Option、悬停与单击在真实 WindowServer 下的表现、输入监控权限授予、多屏与缩放。这些都必须在真实 macOS 上用键鼠完成，自动测试无法替代。
 
 ## 下载
 
-预构建的 Universal 2 应用在 [GitHub Releases](https://github.com/1993yihuan/Ring/releases)，文件名类似 `Ring-1.0.0-macos.zip`。
+当前应用版本是 0.1.2。推送标签 `v0.1.2` 后，[GitHub Releases](https://github.com/1993yihuan/Ring/releases) 上该版本的附件是两个压缩 DMG，没有 zip。磁盘卷顶层是 `Ring.app`：
 
-目前只有 `v0.1.0` 一个包。它在引入这两个工作流的那个提交上构建，之前的两次提交只改了工作流与 README，业务代码与首个提交相同。因此这个包不包含下面「当前状态」里新增的按角度选择、环外单击启动和权限状态修复。压缩包由 `ditto -c -k --keepParent` 生成，用来保住 `Ring.app` 的包结构和 ad-hoc 签名。请在访达里双击 zip 解压。
+- `Ring-0.1.2-intel.dmg`：Intel Mac，可执行文件只有 x86_64。
+- `Ring-0.1.2-apple-silicon.dmg`：Apple Silicon / M 系列 Mac，可执行文件只有 arm64。
 
-这个包的签名方式是 ad-hoc：可以下载安装，macOS Gatekeeper 仍会在第一次打开时拦截，需要下载者自己放行。放行 Gatekeeper 之后，输入监控权限还要单独授予，两者不是同一项授权。
+文件名里的版本来自标签（`v0.1.2` → `0.1.2`），不是写死的旧版本号。查看机型：苹果菜单 → 关于本机。芯片显示 Apple M1、M2、M3、M4 或更新时，下载 Apple Silicon 那个 DMG。处理器显示 Intel 时，下载 Intel 那个 DMG。arm64 包不能在 Intel Mac 上运行。
 
-1. 从 Releases 下载 zip，在访达中双击解压，得到 `Ring.app`。
-2. 把 `Ring.app` 拖到「应用程序」（留在下载位置也可以）。
-3. 第一次打开时系统可能直接阻止。然后任选一种方式放行：
+签名是 ad-hoc（`codesign --sign -`）：可以下载安装，没有 Developer ID，也没有公证。macOS Gatekeeper 会在第一次打开时拦截，需要下载者自己放行。放行 Gatekeeper 之后，输入监控权限还要单独授予，两者不是同一项授权。
+
+1. 从 Releases 下载与本机匹配的 DMG。
+2. 在访达中双击该 DMG，打开磁盘映像。卷内顶层就是 `Ring.app`，不是 zip。
+3. 把 `Ring.app` 拖到「应用程序」（也可以直接从磁盘映像里打开）。
+4. 第一次打开时系统可能直接阻止。然后任选一种方式放行：
    - 打开「系统设置 → 隐私与安全性」，点「仍要打开」（System Settings → Privacy & Security → Open Anyway）；或
    - 在访达中右键 `Ring.app`（或按住 Control 点按），选择「打开」，并在对话框里确认打开（right-click the app and choose Open）。
-4. 菜单栏 → 请求输入监控权限，再到「系统设置 → 隐私与安全性 → 输入监控」勾选 Ring。若系统要求重开，退出后再次打开。这一步与上面的 Gatekeeper 放行无关，装好之后仍然需要。
+5. 菜单栏 → 请求输入监控权限，再到「系统设置 → 隐私与安全性 → 输入监控」勾选 Ring。若系统要求重开，退出后再次打开。这一步与上面的 Gatekeeper 放行无关，装好之后仍然需要。
 
-发布：把要发布的提交合并进 `main` 后，在该提交上推送形如 `v1.0.0` 的标签（`v` 加主版本、次版本、修订号）。GitHub Actions 会运行 `./scripts/test.sh`、`./scripts/build.sh` 和 `./scripts/test-output-guard.sh`，用 `ditto` 把 `build/Ring.app` 打成 zip 并创建对应的 Release。要重跑同一次发布时，在 Actions 的 Release 工作流里选中这个标签再手动运行。
+已有的 `v0.1.0` Release 和它的 `Ring-0.1.0-macos.zip` 保持原样，本流程不重打、不移动、不删除那个 Release。那个 zip 是更早提交打的 Universal 2 包，不包含下面「当前状态」里的按角度选择、环外单击启动和权限状态修复。
 
-发布 runner 是 GitHub 托管的 `macos-26`（Apple Silicon，当前的 `macos-latest`）。2026-11 的镜像软件清单包含 Xcode 26.3（`/Applications/Xcode_26.3.app`），默认 Xcode 则是 26.6。工作流把 `DEVELOPER_DIR` 指到 26.3，与下面已验证的 Xcode 26.3 / Swift 6.2.4 对齐。`Package.swift` 要求 Swift tools 6.0，部署目标是 macOS 13.0，公开 runner 上的这个 Xcode 可以编译。本机记录仍是 Intel 上的 macOS 26.5.1；Actions 在 Apple Silicon 上按脚本编译 x86_64 与 arm64，上传前用 `lipo -archs` 核对两个切片，不启动应用。
+发布：把要发布的提交合并进 `main` 后，在该提交上推送形如 `v0.1.2` 的标签（`v` 加主版本、次版本、修订号）。GitHub Actions 用标签名去掉前缀 `v` 作为版本，运行 `./scripts/test.sh` 和 `./scripts/test-output-guard.sh`，再由 `scripts/package-dmg.sh` 分别以 `RING_ARCHS=x86_64` 与 `RING_ARCHS=arm64` 调用 `./scripts/build.sh`。每次都是 ad-hoc 签名。脚本用 `ditto` 把 `Ring.app` 拷进临时目录，再执行 `hdiutil create -volname Ring -srcfolder <该目录> -format UDZO`，因此卷内顶层是完整的 `Ring.app`，而不是把 zip 再包进 DMG。随后单独挂载每个 DMG，执行 `codesign --verify --strict`，确认输出里有 `Signature=adhoc`，并用 `lipo -archs` 确认可执行文件恰好是这一种架构；多出来的切片或签名不符都会让任务失败。上传文件只有 `Ring-<version>-intel.dmg` 和 `Ring-<version>-apple-silicon.dmg`。若这个标签自己已经有 Release，会用 `--clobber` 覆盖同名 DMG，并删掉该标签上其余附件（包括 `Ring-<version>-macos.zip`）。不会改其他标签。要重跑同一次发布时，在 Actions 的 Release 工作流里选中这个标签再手动运行。
 
-Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionString`（目前是 0.1.0）。标签名不会自动写进这个字段；希望两者一致时，推送标签前先改 plist。
+发布 runner 是 GitHub 托管的 `macos-26`（Apple Silicon，当前的 `macos-latest`）。2026-11 的镜像软件清单包含 Xcode 26.3（`/Applications/Xcode_26.3.app`），默认 Xcode 则是 26.6。工作流把 `DEVELOPER_DIR` 指到 26.3，与下面已验证的 Xcode 26.3 / Swift 6.2.4 对齐。`Package.swift` 要求 Swift tools 6.0，部署目标是 macOS 13.0，公开 runner 上的这个 Xcode 可以编译。本机记录仍是 Intel 上的 macOS 26.5.1；Actions 在 Apple Silicon 上按架构分别编译，挂载 DMG 后核对 `lipo -archs`，不启动应用。
+
+Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionString`（目前是 0.1.2，`CFBundleVersion` 是 2）。标签名不会自动写进这个字段；希望两者一致时，推送标签前先改 plist。
 
 ## 环境要求
 
@@ -49,7 +55,7 @@ Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionStr
 ./scripts/build.sh         # Universal 2 产物：build/Ring.app
 ```
 
-拉取请求上的 CI 运行 `./scripts/test.sh`。推送版本标签时，发布流程会运行 `./scripts/test.sh`、`./scripts/build.sh` 和 `./scripts/test-output-guard.sh`。
+拉取请求上的 CI 运行 `./scripts/test.sh`。推送版本标签时，发布流程会运行 `./scripts/test.sh`、`./scripts/test-output-guard.sh`，并对 x86_64 与 arm64 各运行一次 `./scripts/package-dmg.sh`（内部调用 `./scripts/build.sh`）。
 
 scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编译，用 lipo 合并，随后 ad-hoc 签名并核对每个自带可执行文件的 slice。使用脚本构建时，缓存与输出都指向 build/ 下（CLANG_MODULE_CACHE_PATH、SWIFT_MODULE_CACHE_PATH，以及 SwiftPM 的 cache/config/security 路径）。这是脚本的配置目标，需要走脚本才成立；直接手动跑 swift build 仍可能写项目外目录。
 
@@ -58,6 +64,8 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 输出路径：RING_OUTPUT_DIR 可改构建产物落点（默认 build/），例如 RING_OUTPUT_DIR=$PWD/build/verification ./scripts/build.sh 这样独立复跑不会覆盖已交付的 build/Ring.app。**只接受项目内路径**：build.sh 在删除任何内容之前先校验物理路径，指向项目外（含经符号链接指向外部）会被拒绝并退出 2。校验脚本：./scripts/test-output-guard.sh。
 
 可用环境变量覆盖：RING_ARCHS（默认 x86_64 arm64）、RING_DEPLOYMENT_TARGET（默认 13.0）。
+
+发布不使用默认的双架构合并。`scripts/package-dmg.sh` 把 `RING_ARCHS` 设成单独的 `x86_64` 或 `arm64`，再把该次的 `Ring.app` 打成 DMG。本地直接运行 `./scripts/build.sh` 时默认仍是 Universal 2。这条打包命令依赖 macOS 的 `hdiutil`，不能在 Linux 上执行。
 
 ## 最短试用步骤
 
@@ -79,7 +87,7 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 
 ## 已知限制
 
-- **Apple Silicon 原生运行未验证**：arm64 slice 已编译、链接并通过 lipo 核对，但本机是 Intel，无法运行该 slice。不得用 Rosetta 或切片检查代替实机验收。
+- **Apple Silicon 原生运行未验证**：发布用的 Apple Silicon DMG 只含 arm64，会在打包后用 `lipo -archs` 核对，但本机是 Intel，无法运行它。不得用 Rosetta 或切片检查代替实机验收。
 - 真实键鼠行为未验证：双击 Option、松键保持、按角度悬停与单击、点击是否落后台应用、Esc 取消、普通 Option 组合键不误触、焦点不夺走。
 - 透明区域命中与整屏覆盖未验证：当前屏幕由一块覆盖层接管输入，圆外点击能否稳定穿过 WindowServer 的透明区、覆盖层是否影响其他窗口，都需要真实设备确认。
 - 本轮界面的观感未目视验收：毛玻璃材质、青蓝悬停、中心文案与设置弹窗 8 行是否全可见，都只在离屏编译与纯函数层面确认，未在真实屏幕上查看。
@@ -95,7 +103,7 @@ Sources/RingCore/     纯逻辑：双击识别、布局命中、配置与存储�
 Sources/RingApp/      AppKit/SwiftUI：全局监听、面板、设置、菜单栏、启动器
 Tests/RingCoreTests/  99 个单元测试
 Packaging/Info.plist  bundle 元数据
-scripts/              test.sh、build.sh、make-icon.sh
+scripts/              test.sh、build.sh、package-dmg.sh、make-icon.sh
 .github/workflows/    拉取请求跑测试；推送 vX.Y.Z 标签时打包并发布
 assets/icon/          应用图标源图
 build/                构建产物与缓存（可再生）
