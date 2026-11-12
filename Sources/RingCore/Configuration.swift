@@ -27,6 +27,7 @@ public struct Slot: Codable, Sendable, Equatable, Identifiable {
 public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
     case unsupportedSchema(Int)
     case tooManySlots(Int)
+    case invalidVisibleSlotCount(Int)
     case duplicateSlotID(UUID)
     case invalidReference(String)
     case decoding(String)
@@ -37,6 +38,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
             return "配置版本 \(version) 不受支持"
         case .tooManySlots(let count):
             return "槽位数量 \(count) 超过上限 \(LauncherConfiguration.slotCapacity)"
+        case .invalidVisibleSlotCount(let count):
+            return "可见位置数 \(count) 超出 \(LauncherConfiguration.visibleSlotRange.lowerBound)…\(LauncherConfiguration.visibleSlotRange.upperBound)"
         case .duplicateSlotID(let id):
             return "槽位 ID 重复：\(id.uuidString)"
         case .invalidReference(let reason):
@@ -49,27 +52,50 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
 
 public struct LauncherConfiguration: Codable, Sendable, Equatable {
     public static let schemaVersion = 1
+    /// Storage capacity: always eight slots are persisted, whatever is visible.
     public static let slotCapacity = 8
+    public static let minimumVisibleSlotCount = 3
+    /// Older files have no visible count; eight is exactly the old behaviour.
+    public static let defaultVisibleSlotCount = LauncherConfiguration.slotCapacity
+    public static let visibleSlotRange = LauncherConfiguration.minimumVisibleSlotCount...LauncherConfiguration.slotCapacity
 
     public var version: Int
     public var slots: [Slot]
+    /// How many leading slots are shown and launchable. Lowering it hides slots; it never
+    /// deletes them, so raising it again restores the same apps, ids and order.
+    public var visibleSlotCount: Int
 
-    public init(version: Int = LauncherConfiguration.schemaVersion, slots: [Slot]) {
+    public init(version: Int = LauncherConfiguration.schemaVersion,
+                slots: [Slot],
+                visibleSlotCount: Int = LauncherConfiguration.defaultVisibleSlotCount) {
         self.version = version
         self.slots = slots
+        self.visibleSlotCount = visibleSlotCount
     }
 
-    public static func empty(capacity: Int = LauncherConfiguration.slotCapacity) -> LauncherConfiguration {
-        LauncherConfiguration(slots: (0..<capacity).map { _ in Slot() })
+    public static func empty(capacity: Int = LauncherConfiguration.slotCapacity,
+                             visibleSlotCount: Int? = nil) -> LauncherConfiguration {
+        LauncherConfiguration(slots: (0..<capacity).map { _ in Slot() },
+                              visibleSlotCount: visibleSlotCount ?? capacity)
     }
 
-    /// Brings any slot list to exactly the capacity, keeping order and ids.
+    /// The slots the ring, the settings list and the preview may use.
+    public var visibleSlots: [Slot] {
+        Array(slots.prefix(visibleSlotCount))
+    }
+
+    /// Brings any slot list to exactly the capacity, keeping order and ids, and keeps the
+    /// visible count in range. Never drops the hidden tail.
     public func normalized() -> LauncherConfiguration {
         var result = Array(slots.prefix(LauncherConfiguration.slotCapacity))
         while result.count < LauncherConfiguration.slotCapacity {
             result.append(Slot())
         }
-        return LauncherConfiguration(version: LauncherConfiguration.schemaVersion, slots: result)
+        let visible = min(max(visibleSlotCount, LauncherConfiguration.visibleSlotRange.lowerBound),
+                          LauncherConfiguration.visibleSlotRange.upperBound)
+        return LauncherConfiguration(version: LauncherConfiguration.schemaVersion,
+                                     slots: result,
+                                     visibleSlotCount: visible)
     }
 
     public func validate() throws {
@@ -78,6 +104,9 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         }
         guard slots.count <= LauncherConfiguration.slotCapacity else {
             throw ConfigurationError.tooManySlots(slots.count)
+        }
+        guard LauncherConfiguration.visibleSlotRange.contains(visibleSlotCount) else {
+            throw ConfigurationError.invalidVisibleSlotCount(visibleSlotCount)
         }
         var seen = Set<UUID>()
         for slot in slots {
@@ -89,6 +118,20 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
                 if app.displayName.isEmpty { throw ConfigurationError.invalidReference("名称为空") }
             }
         }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case version
+        case slots
+        case visibleSlotCount
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        slots = try container.decode([Slot].self, forKey: .slots)
+        visibleSlotCount = try container.decodeIfPresent(Int.self, forKey: .visibleSlotCount)
+            ?? LauncherConfiguration.defaultVisibleSlotCount
     }
 
     public func encoded() throws -> Data {

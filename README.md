@@ -10,9 +10,9 @@ macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置�
 
 ## 当前状态
 
-- 已完成：触发识别、环形显示与命中、8 槽位配置与持久化、应用启动与错误反馈、菜单栏与设置窗口、权限状态与显式请求、Universal 2 本地构建。GitHub Release 按架构各发布一个 DMG。
+- 已完成：触发识别、环形显示与命中、可见位置数可配置（3–8，默认 8，收缩只隐藏后缀、调大恢复）、槽位配置与持久化、应用启动与错误反馈、菜单栏与设置窗口、权限状态与显式请求、Universal 2 本地构建。GitHub Release 按架构各发布一个 DMG。
 - 已完成（选择与点击）：环形在打开时所在屏幕绘制，鼠标方向决定高亮的槽位，环心显示该槽位的应用名。圆外同一屏幕任意位置单击按角度启动高亮槽；环内图标单击启动自己；环心、空槽取消；图标之间的间隙只做方向高亮，单击取消。其他屏幕的点击一律不启动。
-- 已完成（界面）：圆形浅色磨砂环、唯一悬停项青蓝强调、设置窗口左侧八方位预览加右侧八行列表、独立权限卡。槽位编号统一为顶部 1、顺时针到 8。
+- 已完成（界面）：圆形浅色磨砂环、唯一悬停项青蓝强调、设置窗口左侧环形预览加右侧槽位列表（按可见位置数显示 N 行 / N 个方向，可选 3–8）、独立权限卡。槽位编号统一为顶部 1、顺时针到 N。
 - 未验证：真实双击 Option、悬停与单击在真实 WindowServer 下的表现、输入监控权限授予、多屏与缩放。这些都必须在真实 macOS 上用键鼠完成，自动测试无法替代。
 
 ## 下载
@@ -52,7 +52,7 @@ Finder 里的版本号来自 `Packaging/Info.plist` 的 `CFBundleShortVersionStr
 在项目根目录执行：
 
 ```bash
-./scripts/test.sh          # 99 个单元测试，日志写 build/test.log
+./scripts/test.sh          # 114 个单元测试，日志写 build/test.log
 ./scripts/test-output-guard.sh   # 构建输出目录校验（项目外路径必须被拒绝）
 ./scripts/build.sh         # Universal 2 产物：build/Ring.app
 ```
@@ -83,7 +83,7 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 
 ## 数据与日志位置
 
-- 配置：data/configuration.json（首次运行自动创建 8 个空槽位）。
+- 配置：data/configuration.json（首次运行自动创建 8 个空槽位；`visibleSlotCount` 记录可见位置数 3–8，缺省为 8，隐藏的槽仍保留在文件里）。
 - 构建日志与缓存：build/。
 - 运行期错误通过 NSLog 输出到系统统一日志（log stream --predicate 'process == "Ring"'），本项目不写自有日志文件。
 
@@ -92,7 +92,9 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 - **Apple Silicon 原生运行未验证**：发布用的 Apple Silicon DMG 只含 arm64，会在打包后用 `lipo -archs` 核对，但本机是 Intel，无法运行它。不得用 Rosetta 或切片检查代替实机验收。
 - 真实键鼠行为未验证：双击 Option、松键保持、按角度悬停与单击、点击是否落后台应用、Esc 取消、普通 Option 组合键不误触、焦点不夺走。
 - 透明区域命中与整屏覆盖未验证：当前屏幕由一块覆盖层接管输入，圆外点击能否稳定穿过 WindowServer 的透明区、覆盖层是否影响其他窗口，都需要真实设备确认。
-- 本轮界面的观感未目视验收：毛玻璃材质、青蓝悬停、中心文案与设置弹窗 8 行是否全可见，都只在离屏编译与纯函数层面确认，未在真实屏幕上查看。
+- 本轮界面的观感未目视验收：毛玻璃材质、青蓝悬停、中心文案与设置弹窗 N 行是否全可见，都只在离屏编译与纯函数层面确认，未在真实屏幕上查看。
+- 可见位置数控件未在真实 GUI 里操作过：3–8 分段控件的点击、隐藏后缀与调大恢复后的列表、预览与真实环，只有纯函数与单元测试覆盖。
+- 小窗口高度只做了离屏测量：可见位置数从 8 降到 3 时设置窗口按内容收窄高度，未在真实屏幕上确认遮挡与裁切。
 - 输入监控权限的授予、拒绝与恢复未在本机实测；设置里的「打开系统设置」只验证到 URL 与目标面板标识符存在，真实跳转未验证。
 - 多显示器、负坐标、混合缩放、全屏 Space 与 Stage Manager 未实测；其他屏幕的点击不启动也只由纯函数规则保证。
 - 睡眠/唤醒、Secure Input、远程键盘未实测。
@@ -103,7 +105,7 @@ scripts/build.sh 分别以 x86_64-apple-macos13.0 与 arm64-apple-macos13.0 编�
 ```
 Sources/RingCore/     纯逻辑：双击识别、布局命中、配置与存储、会话状态、路径解析
 Sources/RingApp/      AppKit/SwiftUI：全局监听、面板、设置、菜单栏、启动器
-Tests/RingCoreTests/  99 个单元测试
+Tests/RingCoreTests/  114 个单元测试
 Packaging/Info.plist  bundle 元数据
 scripts/              test.sh、build.sh、package-dmg.sh、make-icon.sh
 .github/workflows/    拉取请求跑测试；推送 vX.Y.Z 标签时打包并发布；网站变更时发布 Pages

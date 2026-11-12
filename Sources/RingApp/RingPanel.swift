@@ -92,7 +92,9 @@ final class RingView: NSView {
         let text = decision.map {
             RingCenter.text(for: $0, names: items.map(\.name), filled: items.map(\.isFilled))
         } ?? RingCenter.text(for: .none, launches: false)
-        let width = min(side + 12, max(side - 8, 90))
+        // Stay inside the centre disc: with three to eight slots the free middle is the
+        // disc, and a wider text would reach towards the icons on small rings.
+        let width = max(side - 8, 60)
         if let title = text.title {
             drawCentred(title,
                         font: titleFont(fitting: title, width: width, scale: scale),

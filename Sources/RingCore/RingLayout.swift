@@ -5,16 +5,21 @@ public struct RingMetrics: Sendable, Equatable {
     public var iconSize: CGFloat
     public var iconSpacing: CGFloat
     public var padding: CGFloat
+    /// Radius the middle must keep free for the centre cancels target and its three lines.
+    /// Without it a three-slot ring would leave only a few points between the icons.
+    public var minimumCentreRadius: CGFloat
     /// Below this the ring stays usable by shrinking, but icons get hard to hit.
     public var hardMinIconSize: CGFloat
 
     public init(iconSize: CGFloat = 52,
                 iconSpacing: CGFloat = 8,
                 padding: CGFloat = 14,
+                minimumCentreRadius: CGFloat = 40,
                 hardMinIconSize: CGFloat = 8) {
         self.iconSize = iconSize
         self.iconSpacing = iconSpacing
         self.padding = padding
+        self.minimumCentreRadius = minimumCentreRadius
         self.hardMinIconSize = hardMinIconSize
     }
 }
@@ -127,9 +132,14 @@ public enum RingLayout {
         let scale = iconSize / metrics.iconSize
         let spacing = max(2, metrics.iconSpacing * scale)
         let padding = max(3, metrics.padding * scale)
-        let radius: CGFloat = count == 1
+        // Adjacent icons must not touch…
+        let chordRadius: CGFloat = count == 1
             ? iconSize * 0.8
             : (iconSize + spacing) / (2 * sin(CGFloat.pi / CGFloat(count)))
+        // …and the middle must stay free for the centre target and its lines. With the
+        // chord rule alone, three or four slots would leave almost no middle at all.
+        let centreRadius = metrics.minimumCentreRadius * scale
+        let radius = max(chordRadius, centreRadius + iconSize / 2 + spacing)
         let body = 2 * radius + iconSize + padding * 2
         let size = CGSize(width: body, height: body)
         guard size.width <= visible.width, size.height <= visible.height else { return nil }

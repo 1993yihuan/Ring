@@ -34,10 +34,19 @@ public final class RingSession {
         return false
     }
 
-    public var slots: [Slot] { config.slots }
+    /// Only the visible prefix may be shown or launched; the stored tail stays untouched.
+    public var slots: [Slot] { config.visibleSlots }
+
+    public var visibleSlotCount: Int { config.visibleSlotCount }
 
     public func update(config newConfig: LauncherConfiguration) {
-        config = newConfig.normalized()
+        let normalized = newConfig.normalized()
+        if isVisible, normalized.visibleSlotCount != config.visibleSlotCount {
+            // The drawn ring and the slot list would disagree; close it instead of
+            // pairing an old geometry with a new count. The next open uses the new value.
+            phase = .hidden
+        }
+        config = normalized
     }
 
     @discardableResult
@@ -61,7 +70,8 @@ public final class RingSession {
         case .launching:
             return .busy
         case .visible:
-            guard config.slots.indices.contains(index) else {
+            // A hidden slot must never launch, even if a caller passes its index directly.
+            guard index >= 0, index < config.visibleSlotCount, config.slots.indices.contains(index) else {
                 phase = .hidden
                 return .emptySlot
             }
@@ -82,7 +92,7 @@ public final class RingSession {
     }
 
     public func setApp(_ reference: AppReference?, at index: Int) {
-        guard config.slots.indices.contains(index) else { return }
+        guard index >= 0, index < config.visibleSlotCount, config.slots.indices.contains(index) else { return }
         config.slots[index].app = reference
     }
 }
@@ -90,14 +100,20 @@ public final class RingSession {
 public enum SlotReordering {
     /// Moves an app between slots, leaving the vacated slot empty. Slot ids stay put
     /// so a remembered position never starts a different app.
+    /// Swaps two *visible* apps. Hidden slots are never involved and the visible count is
+    /// carried through, so a rebuild cannot silently reset the configuration to eight.
     public static func moveApp(in config: LauncherConfiguration, from source: Int, to destination: Int) -> LauncherConfiguration {
-        var slots = config.normalized().slots
-        guard slots.indices.contains(source), slots.indices.contains(destination), source != destination else {
-            return config.normalized()
+        let normalized = config.normalized()
+        var slots = normalized.slots
+        guard source >= 0, destination >= 0,
+              source < normalized.visibleSlotCount, destination < normalized.visibleSlotCount,
+              slots.indices.contains(source), slots.indices.contains(destination),
+              source != destination else {
+            return normalized
         }
         let moved = slots[source].app
         slots[source].app = slots[destination].app
         slots[destination].app = moved
-        return LauncherConfiguration(slots: slots)
+        return LauncherConfiguration(slots: slots, visibleSlotCount: normalized.visibleSlotCount)
     }
 }

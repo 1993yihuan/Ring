@@ -45,7 +45,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("环形预览")
                         .font(.system(size: 13, weight: .semibold))
-                    SlotRingPreview(slots: model.slots)
+                    SlotRingPreview(slots: model.visibleSlots)
                         .frame(width: 200, height: 200)
                     Text("双击 Option，快速启动")
                         .font(.system(size: 11))
@@ -65,8 +65,9 @@ struct SettingsView: View {
 
     // MARK: - Slots
 
+    /// Only the visible prefix counts: a hidden app is not "configured" on the ring.
     private var filledCount: Int {
-        model.slots.filter { $0.app != nil }.count
+        model.visibleSlots.filter { $0.app != nil }.count
     }
 
     private var slotList: some View {
@@ -75,17 +76,31 @@ struct SettingsView: View {
                 Text("环形槽位")
                     .font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Text("已配置 \(filledCount) / \(model.slots.count)")
+                Text("已配置 \(filledCount) / \(model.visibleSlotCount)")
                     .font(.system(size: 11, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            Text("拖动排序；移除后保留空位，编号与左侧环一致。")
+            HStack(spacing: 8) {
+                Text("可见位置数")
+                    .font(.system(size: 12))
+                Picker("可见位置数", selection: Binding(get: { model.visibleSlotCount },
+                                                      set: { model.setVisibleSlotCount($0) })) {
+                    ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
+                        Text("\(count)").tag(count)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 240)
+                Spacer()
+            }
+            Text("拖动排序；移除后保留空位，编号与左侧环一致。减少数量只隐藏，调大可恢复。")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
-            // Tall enough for all eight rows: scrolling for the main list would hide
+            // Tall enough for every visible row: scrolling for the main list would hide
             // a slot the preview is showing.
             List {
-                ForEach(Array(model.slots.enumerated()), id: \.element.id) { index, slot in
+                ForEach(Array(model.visibleSlots.enumerated()), id: \.element.id) { index, slot in
                     row(index: index, slot: slot)
                         .frame(height: Self.rowHeight)
                         // Without this AppKit adds 8pt per row and the八行 no longer fit.
@@ -97,7 +112,7 @@ struct SettingsView: View {
             }
             .listStyle(.inset)
             .environment(\.defaultMinListRowHeight, Self.rowHeight)
-            .frame(height: CGFloat(model.slots.count) * Self.rowHeight + Self.listChrome)
+            .frame(height: CGFloat(model.visibleSlotCount) * Self.rowHeight + Self.listChrome)
         }
     }
 
@@ -299,6 +314,9 @@ struct SlotRingPreview: View {
 
 final class SettingsModel: ObservableObject {
     @Published var slots: [Slot]
+    /// How many leading slots the list, the preview and the ring show. The full array is
+    /// always kept, so lowering this only hides slots.
+    @Published var visibleSlotCount: Int
     @Published var status: PermissionStatus
     @Published var permissionMessage: String?
     @Published var lastError: String?
@@ -314,8 +332,13 @@ final class SettingsModel: ObservableObject {
     init(config: LauncherConfiguration, store: SlotStore, status: PermissionStatus) {
         self.config = config.normalized()
         self.slots = self.config.slots
+        self.visibleSlotCount = self.config.visibleSlotCount
         self.store = store
         self.status = status
+    }
+
+    var visibleSlots: [Slot] {
+        Array(slots.prefix(visibleSlotCount))
     }
 
     /// A state change makes the previous result message stale: showing "granted and
@@ -347,10 +370,21 @@ final class SettingsModel: ObservableObject {
         }
     }
 
+    /// Changes the visible count only; nothing is deleted, so raising it again restores
+    /// the same apps, ids and order.
+    func setVisibleSlotCount(_ value: Int) {
+        let clamped = min(max(value, LauncherConfiguration.visibleSlotRange.lowerBound),
+                          LauncherConfiguration.visibleSlotRange.upperBound)
+        guard clamped != visibleSlotCount else { return }
+        visibleSlotCount = clamped
+        commit()
+    }
+
+    /// Reorders inside the visible prefix only: the hidden tail is carried over untouched.
     func move(from source: IndexSet, to destination: Int) {
-        var working = slots
-        working.move(fromOffsets: source, toOffset: destination)
-        slots = working
+        var visible = visibleSlots
+        visible.move(fromOffsets: source, toOffset: destination)
+        slots = visible + Array(slots.dropFirst(visibleSlotCount))
         commit()
     }
 
@@ -370,11 +404,13 @@ final class SettingsModel: ObservableObject {
         let reference = AppReference(bundleIdentifier: bundle?.bundleIdentifier,
                                      displayName: FileManager.default.displayName(atPath: url.path),
                                      path: url.path)
+        guard visibleSlots.indices.contains(index) else { return }
         slots[index].app = reference
         commit()
     }
 
     func removeApp(at index: Int) {
+        guard visibleSlots.indices.contains(index) else { return }
         slots[index].app = nil
         commit()
     }
@@ -407,6 +443,7 @@ final class SettingsModel: ObservableObject {
     private func commit() {
         var updated = config
         updated.slots = slots
+        updated.visibleSlotCount = visibleSlotCount
         do {
             let normalized = updated.normalized()
             try store.save(normalized)

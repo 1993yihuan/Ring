@@ -248,9 +248,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// Idempotent: closing an already hidden ring only re-hides the windows, so callers
+    /// (Esc, overlay, outside click, a slot-count change) never leave the panel behind.
     private func cancelRing() {
         recognizer.reset()
-        guard session.isVisible else { return }
         session.cancel()
         hidePanel()
     }
@@ -401,7 +402,15 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                                      store: store,
                                      status: currentStatus)
             model.onConfigChange = { [weak self] config in
-                self?.session.update(config: config)
+                guard let self else { return }
+                let countChanged = config.visibleSlotCount != self.session.visibleSlotCount
+                self.session.update(config: config)
+                // A visible ring was drawn for the old count: close it instead of pairing
+                // that geometry with the new slot list. The next open uses the new value.
+                if countChanged { self.cancelRing() }
+                // A different count changes the sheet's height (three rows vs eight). Grow the
+                // window here as well; the helper only ever grows, so this is a no-op otherwise.
+                self.fitSettingsWindow()
             }
             model.onRefreshPermission = { [weak self] in
                 guard let self else { return }

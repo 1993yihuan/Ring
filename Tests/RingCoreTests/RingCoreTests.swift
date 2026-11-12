@@ -1151,3 +1151,229 @@ final class ProjectPathsTests: XCTestCase {
         XCTAssertFalse(root.path.contains("Application Support"))
     }
 }
+
+/// A configurable number of visible slots (3…8) on top of the fixed eight-slot storage.
+final class SlotCountTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    private let visibleFrame = CGRect(x: 0, y: 0, width: 1512, height: 950)
+
+    private func app(_ name: String) -> AppReference {
+        AppReference(bundleIdentifier: "com.example.\(name)", displayName: name, path: "/Applications/\(name).app")
+    }
+
+    private func configuration(visible: Int, filled: [Int: String]) -> LauncherConfiguration {
+        var slots = LauncherConfiguration.empty().slots
+        for (index, name) in filled { slots[index].app = app(name) }
+        return LauncherConfiguration(slots: slots, visibleSlotCount: visible).normalized()
+    }
+
+    // MARK: - Storage
+
+    func testMissingVisibleCountDefaultsToEight() throws {
+        // A file written before the field existed: no "visibleSlotCount" key at all.
+        let legacy: [String: Any] = [
+            "version": 1,
+            "slots": (0..<8).map { _ in ["id": UUID().uuidString, "app": NSNull()] }
+        ]
+        let data = try JSONSerialization.data(withJSONObject: legacy)
+        let decoded = try LauncherConfiguration.decoded(from: data)
+        XCTAssertEqual(decoded.visibleSlotCount, 8)
+        XCTAssertEqual(decoded.slots.count, 8)
+    }
+
+    func testOutOfRangeVisibleCountIsRejected() {
+        for count in [2, 9, 0, -1] {
+            let configuration = LauncherConfiguration(slots: LauncherConfiguration.empty().slots, visibleSlotCount: count)
+            XCTAssertThrowsError(try configuration.validate()) { error in
+                XCTAssertEqual(error as? ConfigurationError, .invalidVisibleSlotCount(count))
+            }
+        }
+    }
+
+    func testWrongVisibleCountTypeIsADecodingError() {
+        let json = """
+        {"version": 1, "visibleSlotCount": "many", "slots": []}
+        """
+        XCTAssertThrowsError(try LauncherConfiguration.decoded(from: Data(json.utf8))) { error in
+            guard case ConfigurationError.decoding = error else { return XCTFail("expected decoding error, got \(error)") }
+        }
+    }
+
+    func testShortSlotListIsPaddedButKeepsItsVisibleCount() throws {
+        let short = LauncherConfiguration(version: 1,
+                                          slots: [Slot(), Slot(), Slot()],
+                                          visibleSlotCount: 3)
+        let decoded = try LauncherConfiguration.decoded(from: try short.encoded())
+        XCTAssertEqual(decoded.slots.count, 8)
+        XCTAssertEqual(decoded.visibleSlotCount, 3)
+        XCTAssertEqual(decoded.visibleSlots.count, 3)
+    }
+
+    /// 8 → 3 → 8 must return the very same apps, ids and order: the hidden tail is stored,
+    /// not deleted.
+    func testLoweringThenRaisingTheCountRestoresEverySlot() throws {
+        let original = configuration(visible: 8, filled: [0: "A", 1: "B", 2: "C", 5: "E", 7: "G"])
+        let ids = original.slots.map(\.id)
+
+        var lowered = original
+        lowered.visibleSlotCount = 3
+        let stored = try LauncherConfiguration.decoded(from: try lowered.encoded())
+        XCTAssertEqual(stored.visibleSlotCount, 3)
+        XCTAssertEqual(stored.visibleSlots.map { $0.app?.displayName }, ["A", "B", "C"])
+
+        var raised = stored
+        raised.visibleSlotCount = 8
+        let back = try LauncherConfiguration.decoded(from: try raised.encoded())
+        XCTAssertEqual(back.visibleSlotCount, 8)
+        XCTAssertEqual(back.slots.map(\.id), ids)
+        let expectedNames: [String?] = ["A", "B", "C", nil, nil, "E", nil, "G"]
+        XCTAssertEqual(back.slots.map { $0.app?.displayName }, expectedNames)
+    }
+
+    func testSaveFailureKeepsThePreviousFile() throws {
+        let directory = testScratchDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SlotStore(directory: directory)
+        try store.save(configuration(visible: 8, filled: [0: "A"]))
+        let before = try String(contentsOf: store.fileURL, encoding: .utf8)
+        let invalid = configuration(visible: 8, filled: [0: "A"])
+        var broken = invalid
+        broken.visibleSlotCount = 2
+        XCTAssertThrowsError(try store.save(broken))
+        XCTAssertEqual(try String(contentsOf: store.fileURL, encoding: .utf8), before)
+    }
+
+    // MARK: - Session
+
+    func testSessionExposesOnlyTheVisiblePrefix() {
+        let session = RingSession(config: configuration(visible: 4, filled: [3: "D", 6: "G"]))
+        XCTAssertEqual(session.visibleSlotCount, 4)
+        XCTAssertEqual(session.slots.count, 4)
+        XCTAssertEqual(session.slots[3].app?.displayName, "D")
+    }
+
+    /// A hidden slot must not launch even when its index is passed in directly.
+    func testHiddenSlotNeverLaunches() {
+        let session = RingSession(config: configuration(visible: 3, filled: [5: "F"]))
+        XCTAssertTrue(session.trigger())
+        XCTAssertEqual(session.click(slot: 5), .emptySlot)
+        XCTAssertEqual(session.launchCount, 0)
+        XCTAssertFalse(session.isVisible)
+    }
+
+    func testVisibleSlotInAShortRingLaunches() {
+        let session = RingSession(config: configuration(visible: 3, filled: [2: "C"]))
+        XCTAssertTrue(session.trigger())
+        guard case .launch(let request) = session.click(slot: 2) else { return XCTFail("expected launch") }
+        XCTAssertEqual(request.reference.displayName, "C")
+        XCTAssertEqual(session.launchCount, 1)
+    }
+
+    func testChangingTheCountHidesAVisibleRing() {
+        let session = RingSession(config: configuration(visible: 8, filled: [0: "A"]))
+        XCTAssertTrue(session.trigger())
+        session.update(config: configuration(visible: 4, filled: [0: "A"]))
+        XCTAssertFalse(session.isVisible, "旧几何不能继续配新数量")
+        XCTAssertEqual(session.slots.count, 4)
+    }
+
+    func testSetAppAndMoveAppStayInsideTheVisiblePrefix() {
+        let session = RingSession(config: configuration(visible: 3, filled: [0: "A", 1: "B", 2: "C"]))
+        session.setApp(app("H"), at: 6)
+        XCTAssertNil(session.config.slots[6].app, "隐藏位不可通过 setApp 修改")
+
+        let hiddenBefore = session.config.slots[6]
+        let moved = SlotReordering.moveApp(in: session.config, from: 0, to: 5)
+        XCTAssertEqual(moved, session.config, "隐藏位参与的重排必须整体无效")
+        XCTAssertEqual(moved.slots[6], hiddenBefore)
+
+        let swapped = SlotReordering.moveApp(in: session.config, from: 0, to: 2)
+        XCTAssertEqual(swapped.visibleSlotCount, 3)
+        XCTAssertEqual(swapped.slots[0].app?.displayName, "C")
+        XCTAssertEqual(swapped.slots[2].app?.displayName, "A")
+        XCTAssertEqual(swapped.slots[6], hiddenBefore)
+    }
+
+    // MARK: - Geometry for every count
+
+    private func geometry(count: Int) -> RingGeometry {
+        try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                           mouse: CGPoint(x: 700, y: 500),
+                                           screens: [screen],
+                                           visibleFrames: [visibleFrame]))
+    }
+
+    /// 3…8 slots must all keep the middle free: the centre carries the cancel target and
+    /// up to three lines, and icons must never reach into it.
+    func testEveryCountKeepsTheMiddleClear() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = geometry(count: count)
+            XCTAssertEqual(ring.iconFrames.count, count, "N=\(count)")
+            let discRadius = ring.cancelFrame.width / 2
+            XCTAssertGreaterThanOrEqual(ring.cancelFrame.width, 80, "N=\(count) 中心太窄")
+            // The drawn icon is an oval inside its frame (inset 6 idle, 3 hovered): the
+            // frames' corners are never painted, so the invariant is about drawn shapes.
+            let hoverTileRadius = (ring.iconSize - 6) / 2
+            let centre = CGPoint(x: ring.panelFrame.midX, y: ring.panelFrame.midY)
+            for (index, frame) in ring.iconFrames.enumerated() {
+                let distance = ((frame.midX - centre.x) * (frame.midX - centre.x)
+                    + (frame.midY - centre.y) * (frame.midY - centre.y)).squareRoot()
+                XCTAssertGreaterThanOrEqual(distance, discRadius + hoverTileRadius,
+                                            "N=\(count) 图标 \(index) 的绘制圆贴到中心盘")
+            }
+            XCTAssertTrue(visibleFrame.contains(ring.panelFrame), "N=\(count) 面板超出可见区域")
+        }
+    }
+
+    func testEveryCountPlacesIconsEvenlyAroundTheCircle() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = geometry(count: count)
+            let centre = RingPointer.ringCenter(of: ring)
+            let angles = ring.iconFrames.map { frame in
+                RingPointer.degrees(from: centre,
+                                    to: CGPoint(x: ring.panelFrame.minX + frame.midX,
+                                                y: ring.panelFrame.minY + frame.midY))
+            }
+            for index in 1..<count {
+                let step = (angles[index] - angles[index - 1] + 360).truncatingRemainder(dividingBy: 360)
+                XCTAssertEqual(step, 360 / Double(count), accuracy: 0.5, "N=\(count) 相邻图标不等距")
+            }
+        }
+    }
+
+    func testAngularSelectionFollowsTheConfiguredCount() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = geometry(count: count)
+            let centre = RingPointer.ringCenter(of: ring)
+            let filled = Array(repeating: true, count: count)
+            let step = 360 / Double(count)
+            for index in 0..<count {
+                let radians = (Double(index) * step) * .pi / 180
+                let far = CGPoint(x: centre.x + sin(radians) * 400, y: centre.y + cos(radians) * 400)
+                XCTAssertEqual(RingPointer.decide(far, activeScreenFrame: screen, geometry: ring, filled: filled).action,
+                               .launch(index), "N=\(count) 方向 \(index)")
+            }
+        }
+    }
+
+    func testThreeSlotRingKeepsTheGapAndCentreRules() {
+        let ring = geometry(count: 3)
+        let centre = RingPointer.ringCenter(of: ring)
+        let filled = [true, true, true]
+        let step = 360.0 / 3
+        // 扇区边界（图标之间）仍在圆内：高亮方向、点击取消。
+        let gap = CGPoint(x: centre.x + sin((step / 2) * .pi / 180) * (ring.plateRect.width / 2 - 2),
+                          y: centre.y + cos((step / 2) * .pi / 180) * (ring.plateRect.width / 2 - 2))
+        let gapDecision = RingPointer.decide(gap, activeScreenFrame: screen, geometry: ring, filled: filled)
+        XCTAssertEqual(gapDecision.slot, 1)
+        XCTAssertEqual(gapDecision.action, .cancel)
+        // 环外同方向启动。
+        let outside = CGPoint(x: centre.x + sin((step / 2) * .pi / 180) * (ring.plateRect.width / 2 + 60),
+                              y: centre.y + cos((step / 2) * .pi / 180) * (ring.plateRect.width / 2 + 60))
+        XCTAssertEqual(RingPointer.decide(outside, activeScreenFrame: screen, geometry: ring, filled: filled).action, .launch(1))
+        // 中心仍取消且无方向。
+        let centreDecision = RingPointer.decide(centre, activeScreenFrame: screen, geometry: ring, filled: filled)
+        XCTAssertNil(centreDecision.slot)
+        XCTAssertEqual(centreDecision.action, .cancel)
+    }
+}
