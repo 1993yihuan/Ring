@@ -57,15 +57,30 @@ jobs:
           fi
           sudo xcode-select -s "$app"
           echo "xcode-select: $(xcode-select -p)"
-          xcodebuild -version
-          xcodebuild -version | grep -q 'Xcode 26\.3'
+          # Read each tool to completion, then match the saved text.
+          # `grep -q` closes a pipe after the first hit; xcodebuild then
+          # aborts (exit 134) while writing the next "Build version" line.
+          xcodebuild_version="$(xcodebuild -version)"
+          printf '%s\n' "$xcodebuild_version"
+          if ! grep -q 'Xcode 26\.3' <<< "$xcodebuild_version"; then
+            echo "xcodebuild did not report Xcode 26.3" >&2
+            exit 1
+          fi
           xcrun --find swift
-          xcrun swift --version
-          xcrun swift --version | grep -q 'Apple Swift version 6\.2'
+          xcrun_swift_version="$(xcrun swift --version)"
+          printf '%s\n' "$xcrun_swift_version"
+          if ! grep -q 'Apple Swift version 6\.2' <<< "$xcrun_swift_version"; then
+            echo "xcrun swift did not report Apple Swift version 6.2" >&2
+            exit 1
+          fi
           # scripts/test.sh and scripts/build.sh invoke `swift` on PATH.
           command -v swift
-          swift --version
-          swift --version | grep -q 'Apple Swift version 6\.2'
+          swift_version="$(swift --version)"
+          printf '%s\n' "$swift_version"
+          if ! grep -q 'Apple Swift version 6\.2' <<< "$swift_version"; then
+            echo "swift on PATH did not report Apple Swift version 6.2" >&2
+            exit 1
+          fi
 
       - name: Unit tests
         run: ./scripts/test.sh
