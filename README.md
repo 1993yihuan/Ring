@@ -2,6 +2,8 @@
 
 macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置弹出环形启动器，点击图标在前台打开配置的应用。
 
+网站：https://1993yihuan.github.io/Ring/ （静态页面在 `website/`，推送到 `main` 后由 GitHub Actions 发布到 GitHub Pages）。
+
 本目录是项目交付物的唯一位置：源码、测试、脚本、构建产物、运行数据、日志都在这里，不使用 Application Support，不在其他目录保存项目副本。
 
 构建工具自身的缓存可能写到项目外。`scripts/*.sh` 已把 SwiftPM 与模块缓存显式指向 `build/`，所以用脚本构建时缓存留在项目内；直接手动执行 `swift build` 不受此约束。
@@ -104,8 +106,9 @@ Sources/RingApp/      AppKit/SwiftUI：全局监听、面板、设置、菜单�
 Tests/RingCoreTests/  99 个单元测试
 Packaging/Info.plist  bundle 元数据
 scripts/              test.sh、build.sh、package-dmg.sh、make-icon.sh
-.github/workflows/    拉取请求跑测试；推送 vX.Y.Z 标签时打包并发布
+.github/workflows/    拉取请求跑测试；推送 vX.Y.Z 标签时打包并发布；网站变更时发布 Pages
 assets/icon/          应用图标源图
+website/              产品页（GitHub Pages）
 build/                构建产物与缓存（可再生）
 data/                 运行期配置
 ```
