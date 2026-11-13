@@ -2,6 +2,8 @@
 
 macOS 桌面演示：双击同一侧 Option，第二次松键后在鼠标位置弹出环形启动器，点击图标在前台打开配置的应用。
 
+![双击 Option，即刻启动](assets/readme-hero.png)
+
 网站：https://1993yihuan.github.io/Ring/ （静态页面在 `website/`，推送到 `main` 后由 GitHub Actions 发布到 GitHub Pages）。
 
 本目录是项目交付物的唯一位置：源码、测试、脚本、构建产物、运行数据、日志都在这里，不使用 Application Support，不在其他目录保存项目副本。
