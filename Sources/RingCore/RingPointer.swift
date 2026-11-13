@@ -31,6 +31,35 @@ public struct RingPointerDecision: Sendable, Equatable {
     }
 }
 
+/// Which input surface may drive the ring's highlight.
+public enum RingPointerSource: Sendable, Equatable {
+    /// The overlay window that covers the ring's screen.
+    case overlay
+    /// The passive global move stream (crosses displays).
+    case global
+}
+
+public enum RingPointerRouting {
+    /// Exactly one source per mode: the overlay carries the menu entry's clicks, the global
+    /// stream follows the held gesture across displays. Two streams carry coordinates from
+    /// different moments, so accepting both would let an older one overwrite a newer
+    /// highlight — the function being the same does not preserve event order.
+    public static func source(for mode: RingInputMode) -> RingPointerSource {
+        switch mode {
+        case .angularClick: return .overlay
+        case .holdToLaunch: return .global
+        }
+    }
+
+    /// A move is applied only from the mode's own source while a ring is actually up.
+    public static func acceptsMove(from source: RingPointerSource,
+                                   mode: RingInputMode,
+                                   ringVisible: Bool) -> Bool {
+        guard ringVisible else { return false }
+        return source == self.source(for: mode)
+    }
+}
+
 public enum RingPointer {
     /// Screen-space centre of the drawn ring (AppKit screen coordinates, y up).
     public static func ringCenter(of geometry: RingGeometry) -> CGPoint {
@@ -61,6 +90,41 @@ public enum RingPointer {
 
     public static func slot(at point: CGPoint, center: CGPoint, slotCount: Int) -> Int {
         slotIndex(degrees: degrees(from: center, to: point), slotCount: slotCount)
+    }
+
+    /// The gesture's selection, in this order:
+    ///
+    /// 1. On an icon's stable circle (the existing frame's centre and width): that slot.
+    /// 2. Inside the drawn circle but not on an icon (centre, gaps between icons, the square
+    ///    corners of the ring panel that fall inside the circle): nothing is selected, so a
+    ///    release cancels and the centre cannot name a direction.
+    /// 3. Outside the drawn circle: the angle around the ring centre decides, at any
+    ///    distance and on any display — the gesture is not clipped to one screen. The menu
+    ///    entry keeps its own screen-limited rule.
+    public static func holdSelection(_ point: CGPoint,
+                                     geometry: RingGeometry,
+                                     filled: [Bool]) -> RingPointerDecision {
+        guard !filled.isEmpty else { return RingPointerDecision(slot: nil, action: .cancel) }
+        // Stable circular hit inside each drawn square frame: the frame's centre and width
+        // are fixed, so hover and release agree and the hover scaling never moves the
+        // target. The circle is the frame's inscribed circle — slightly larger than the
+        // drawn tile, which keeps a click margin — and the square's corners are blank.
+        let local = geometry.pointInPanel(point)
+        for (index, frame) in geometry.iconFrames.enumerated() where filled.indices.contains(index) {
+            let dx = local.x - frame.midX
+            let dy = local.y - frame.midY
+            let radius = frame.width / 2
+            guard dx * dx + dy * dy <= radius * radius else { continue }
+            return RingPointerDecision(slot: index, action: filled[index] ? .launch(index) : .cancel)
+        }
+        guard !isInsideDrawnRing(point, geometry: geometry) else {
+            // Centre, the blank ring interior and the panel's square corners that sit inside
+            // the circle: nothing is selected here.
+            return RingPointerDecision(slot: nil, action: .cancel)
+        }
+        let slot = RingPointer.slot(at: point, center: ringCenter(of: geometry), slotCount: filled.count)
+        guard filled.indices.contains(slot) else { return RingPointerDecision(slot: nil, action: .cancel) }
+        return RingPointerDecision(slot: slot, action: filled[slot] ? .launch(slot) : .cancel)
     }
 
     /// The single boundary definition for "is this point part of the ring we drew".

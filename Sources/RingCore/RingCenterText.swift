@@ -1,5 +1,14 @@
 import Foundation
 
+/// Which entry opened the ring. Both share geometry and highlight, but a click and a
+/// release mean different things, and the centre has to say which one is in effect.
+public enum RingInputMode: Sendable, Equatable {
+    /// Menu / manual entry: move the pointer, click to launch.
+    case angularClick
+    /// Option gesture: hold the second press, release to launch what is highlighted.
+    case holdToLaunch
+}
+
 /// What the pointer is on, reduced to the three cases the ring centre can say
 /// something true about.
 public enum RingHover: Sendable, Equatable {
@@ -44,6 +53,39 @@ public enum RingCenter {
         // Reuse the one index → RingHover mapping instead of repeating its rules.
         return text(for: hover(index: decision.slot, names: names, filled: filled),
                     launches: decision.launches)
+    }
+
+    /// Copy for "no decision yet": the ring has just appeared, or the highlight was
+    /// cleared, so nothing is selected. The gesture entry still promises what a release
+    /// does; the angular entry stays quiet until the pointer means something.
+    public static func restingText(mode: RingInputMode) -> RingCenterText {
+        switch mode {
+        case .holdToLaunch:
+            return RingCenterText(title: nil, action: "松开取消")
+        case .angularClick:
+            return RingCenterText(title: nil, action: nil)
+        }
+    }
+
+    /// Mode-aware copy: the gesture entry has no click, so it must not promise one.
+    public static func text(for decision: RingPointerDecision,
+                            names: [String],
+                            filled: [Bool],
+                            mode: RingInputMode) -> RingCenterText {
+        switch mode {
+        case .angularClick:
+            return text(for: decision, names: names, filled: filled)
+        case .holdToLaunch:
+            guard let slot = decision.slot,
+                  names.indices.contains(slot),
+                  filled.indices.contains(slot) else {
+                // Nothing is selected: releasing only closes the ring.
+                return RingCenterText(title: nil, action: "松开取消")
+            }
+            if !filled[slot] { return RingCenterText(title: "空位", action: "松开取消") }
+            let name = names[slot]
+            return RingCenterText(title: name.isEmpty ? nil : name, action: "松开启动")
+        }
     }
 
     /// `launches` is the click outcome, not the hover direction: a gap inside the drawn

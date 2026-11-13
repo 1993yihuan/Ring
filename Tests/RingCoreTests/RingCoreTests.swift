@@ -39,21 +39,65 @@ private func testScratchDirectory() -> URL {
 }
 
 final class OptionDoubleTapRecognizerTests: XCTestCase {
-    func testDoubleTapOnSameSideTriggersOnSecondRelease() {
+    /// The ring must appear on the second press, not wait for its release.
+    func testSecondPressShowsImmediatelyAndReleaseCommits() {
         var recognizer = OptionDoubleTapRecognizer()
         XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start), .none)
         XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.08), .none)
-        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.2), .none)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.28), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.2), .triggered(.left))
+        XCTAssertEqual(recognizer.state, .holding(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.28), .released(.left))
         XCTAssertEqual(recognizer.state, .idle)
     }
 
-    func testRightSideAlsoTriggers() {
+    func testRightSideAlsoTriggersOnPress() {
         var recognizer = OptionDoubleTapRecognizer()
         _ = recognizer.handle(.optionDown(.right), at: start)
         _ = recognizer.handle(.optionUp(.right), at: start + 0.05)
-        _ = recognizer.handle(.optionDown(.right), at: start + 0.15)
-        XCTAssertEqual(recognizer.handle(.optionUp(.right), at: start + 0.2), .triggered(.right))
+        XCTAssertEqual(recognizer.handle(.optionDown(.right), at: start + 0.15), .triggered(.right))
+        XCTAssertEqual(recognizer.handle(.optionUp(.right), at: start + 0.2), .released(.right))
+    }
+
+    /// A long hold is the normal way to aim: it must never expire or be treated as a stall.
+    func testHoldingSurvivesAnyDuration() {
+        var recognizer = OptionDoubleTapRecognizer()
+        _ = recognizer.handle(.optionDown(.left), at: start)
+        _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.15), .triggered(.left))
+        for offset in [1.0, 5.0, 30.0] {
+            XCTAssertEqual(recognizer.timeout(at: start + offset), .none, "按住 \(offset)s 不应超时")
+            XCTAssertEqual(recognizer.state, .holding(.left))
+        }
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 31), .released(.left))
+    }
+
+    func testOtherSideWhileHoldingCollapses() {
+        var recognizer = OptionDoubleTapRecognizer()
+        _ = recognizer.handle(.optionDown(.left), at: start)
+        _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
+        _ = recognizer.handle(.optionDown(.left), at: start + 0.15)
+        XCTAssertEqual(recognizer.handle(.optionDown(.right), at: start + 0.2), .reset)
+        XCTAssertEqual(recognizer.state, .idle)
+        XCTAssertEqual(recognizer.handle(.optionUp(.right), at: start + 0.25), .none)
+    }
+
+    func testWrongSideReleaseWhileHoldingCollapses() {
+        var recognizer = OptionDoubleTapRecognizer()
+        _ = recognizer.handle(.optionDown(.left), at: start)
+        _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
+        _ = recognizer.handle(.optionDown(.left), at: start + 0.15)
+        XCTAssertEqual(recognizer.handle(.optionUp(.right), at: start + 0.3), .reset)
+        XCTAssertEqual(recognizer.state, .idle)
+    }
+
+    func testInterferenceWhileHoldingCollapses() {
+        var recognizer = OptionDoubleTapRecognizer()
+        _ = recognizer.handle(.optionDown(.left), at: start)
+        _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
+        _ = recognizer.handle(.optionDown(.left), at: start + 0.15)
+        XCTAssertEqual(recognizer.handle(.interference, at: start + 0.2), .reset)
+        XCTAssertEqual(recognizer.state, .idle)
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.3), .none)
     }
 
     func testMixedSidesDoNotTrigger() {
@@ -72,16 +116,16 @@ final class OptionDoubleTapRecognizerTests: XCTestCase {
         XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.45), .reset)
         XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.5), .none)
         XCTAssertEqual(recognizer.state, .awaitingSecondDown(.left))
-        _ = recognizer.handle(.optionDown(.left), at: start + 0.6)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.65), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.6), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.65), .released(.left))
     }
 
     func testGapWithinThresholdStillTriggers() {
         var recognizer = OptionDoubleTapRecognizer()
         _ = recognizer.handle(.optionDown(.left), at: start)
         _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
-        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.05 + 0.34), .none)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.44), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.05 + 0.34), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.44), .released(.left))
     }
 
     func testLongHoldDoesNotCount() {
@@ -114,8 +158,8 @@ final class OptionDoubleTapRecognizerTests: XCTestCase {
         _ = recognizer.handle(.optionDown(.left), at: start + 0.15)
         XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.2), .none)
         XCTAssertEqual(recognizer.state, .awaitingSecondDown(.left))
-        _ = recognizer.handle(.optionDown(.left), at: start + 0.25)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.3), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.25), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.3), .released(.left))
     }
 
     func testInterferenceWhileIdleIsSilent() {
@@ -128,8 +172,8 @@ final class OptionDoubleTapRecognizerTests: XCTestCase {
         var recognizer = OptionDoubleTapRecognizer()
         _ = recognizer.handle(.optionDown(.left), at: start)
         _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
-        _ = recognizer.handle(.optionDown(.left), at: start + 0.15)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.2), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.15), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.2), .released(.left))
         XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.21), .none)
         XCTAssertEqual(recognizer.state, .idle)
     }
@@ -138,8 +182,8 @@ final class OptionDoubleTapRecognizerTests: XCTestCase {
         var recognizer = OptionDoubleTapRecognizer()
         _ = recognizer.handle(.optionDown(.left), at: start)
         _ = recognizer.handle(.optionUp(.left), at: start + 0.05)
-        _ = recognizer.handle(.optionDown(.left), at: start + 0.1)
-        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.15), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionDown(.left), at: start + 0.1), .triggered(.left))
+        XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.15), .released(.left))
         _ = recognizer.handle(.optionDown(.left), at: start + 0.2)
         XCTAssertEqual(recognizer.handle(.optionUp(.left), at: start + 0.25), .none)
     }
@@ -1101,8 +1145,8 @@ final class ModifierNormalizerTests: XCTestCase {
         }
         _ = feed([.maskAlternate], at: start)
         _ = feed([], at: start + 0.05)
-        _ = feed([.maskAlternate], at: start + 0.15)
-        XCTAssertEqual(feed([], at: start + 0.2), .triggered(.left))
+        XCTAssertEqual(feed([.maskAlternate], at: start + 0.15), .triggered(.left))
+        XCTAssertEqual(feed([], at: start + 0.2), .released(.left))
     }
 
     /// Overlapping left/right Option must not trigger (verifier scenario B).
@@ -1375,5 +1419,346 @@ final class SlotCountTests: XCTestCase {
         let centreDecision = RingPointer.decide(centre, activeScreenFrame: screen, geometry: ring, filled: filled)
         XCTAssertNil(centreDecision.slot)
         XCTAssertEqual(centreDecision.action, .cancel)
+    }
+}
+
+/// The Option gesture: hold the second press, release to launch what is under the pointer.
+final class HoldToLaunchTests: XCTestCase {
+    private let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+    private let visible = CGRect(x: 0, y: 0, width: 1512, height: 950)
+    private let allFilled = Array(repeating: true, count: 8)
+    private let names = ["A", "B", "C", "D", "E", "F", "G", "H"]
+
+    private func geometry() -> RingGeometry {
+        try! XCTUnwrap(RingLayout.geometry(slotCount: 8,
+                                           mouse: CGPoint(x: 700, y: 500),
+                                           screens: [screen],
+                                           visibleFrames: [visible]))
+    }
+
+    private func world(_ local: CGPoint, in ring: RingGeometry) -> CGPoint {
+        CGPoint(x: ring.panelFrame.minX + local.x, y: ring.panelFrame.minY + local.y)
+    }
+
+    private func hold(_ point: CGPoint, ring: RingGeometry, filled: [Bool]? = nil) -> RingPointerDecision {
+        RingPointer.holdSelection(point, geometry: ring, filled: filled ?? allFilled)
+    }
+
+    /// A point inside the drawn circle that is not on any icon (22.5° 是图标之间的交界).
+    private func inRingBlank(_ ring: RingGeometry) -> CGPoint {
+        let centre = RingPointer.ringCenter(of: ring)
+        let radius = ring.plateRect.width / 2 - 4
+        let radians = 22.5 * Double.pi / 180
+        return CGPoint(x: centre.x + sin(radians) * radius, y: centre.y + cos(radians) * radius)
+    }
+
+    func testIconCentreIsSelected() {
+        let ring = geometry()
+        for (index, frame) in ring.iconFrames.enumerated() {
+            let point = world(CGPoint(x: frame.midX, y: frame.midY), in: ring)
+            let decision = hold(point, ring: ring)
+            XCTAssertEqual(decision.slot, index)
+            XCTAssertEqual(decision.action, .launch(index))
+        }
+    }
+
+    /// The hit is the stable circle inscribed in each frame: its centre and width do not
+    /// change with the hover scaling, so the target cannot move under the pointer.
+    func testPointsInsideTheIconCircleSelectTheirIcon() {
+        let ring = geometry()
+        for (index, frame) in ring.iconFrames.enumerated() {
+            let radius = frame.width / 2
+            for degrees in stride(from: 0.0, to: 360.0, by: 45.0) {
+                let radians = degrees * Double.pi / 180
+                let local = CGPoint(x: frame.midX + cos(radians) * radius * 0.9,
+                                    y: frame.midY + sin(radians) * radius * 0.9)
+                XCTAssertEqual(hold(world(local, in: ring), ring: ring).action, .launch(index),
+                               "槽位 \(index) 圆内 \(degrees)° 应选中自己")
+            }
+            // 圆边界是半径判定：内外用 ±1e-3 明确区分（正好落在边界上的点由坐标舍入决定，
+            // 不假装能判相等）。
+            let justInside = CGPoint(x: frame.midX + radius - 1e-3, y: frame.midY)
+            let justOutside = CGPoint(x: frame.midX + radius + 1e-3, y: frame.midY)
+            XCTAssertEqual(hold(world(justInside, in: ring), ring: ring).action, .launch(index))
+            XCTAssertNil(hold(world(justOutside, in: ring), ring: ring).slot)
+        }
+    }
+
+    /// The square frame's corners are not part of the stable circle: they are blank space,
+    /// so a release there cancels instead of guessing between neighbours.
+    /// A frame corner is never part of the icon circle. Whether it then cancels or selects by
+    /// angle depends only on the drawn circle: inside it is blank, outside it is the angular
+    /// rule — the square corners of the panel are not a boundary of their own.
+    func testFrameCornersFollowTheDrawnCircle() {
+        let ring = geometry()
+        for (index, frame) in ring.iconFrames.enumerated() {
+            for local in [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+                          CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: frame.maxX, y: frame.maxY)] {
+                let point = world(local, in: ring)
+                let decision = hold(point, ring: ring)
+                if RingPointer.isInsideDrawnRing(point, geometry: ring) {
+                    XCTAssertNil(decision.slot, "槽位 \(index) 的方角在环内应空白：\(local)")
+                    XCTAssertEqual(decision.action, .cancel)
+                } else {
+                    XCTAssertEqual(decision.slot,
+                                   RingPointer.slot(at: point, center: RingPointer.ringCenter(of: ring), slotCount: 8),
+                                   "环外的方角按角度选槽：\(local)")
+                }
+            }
+        }
+    }
+
+    /// The reported N=7 case: neighbouring square frames overlap in an invisible corner
+    /// region. Under the circular rule that region belongs to nobody and must cancel.
+    func testOverlappingSquareCornersInN7AreBlank() {
+        let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: 7,
+                                                       mouse: CGPoint(x: 700, y: 500),
+                                                       screens: [screen],
+                                                       visibleFrames: [visible]))
+        var overlaps = 0
+        for (index, frame) in ring.iconFrames.enumerated() {
+            let corners = [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
+                           CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: frame.maxX, y: frame.maxY)]
+            for corner in corners {
+                let owners = ring.iconFrames.enumerated().filter { $0.element.contains(corner) }.map(\.offset)
+                guard owners.count > 1 else { continue }
+                overlaps += 1
+                let decision = RingPointer.holdSelection(world(corner, in: ring),
+                                                        geometry: ring,
+                                                        filled: Array(repeating: true, count: 7))
+                XCTAssertNil(decision.slot, "重叠角区（槽 \(owners)）必须空白")
+                XCTAssertEqual(decision.action, .cancel)
+            }
+        }
+        XCTAssertGreaterThan(overlaps, 0, "若 N=7 已无方框重叠，本用例失去对象")
+    }
+
+    /// Inside the ring but not on an icon: nothing is selected, so a release cancels.
+    func testBlankInsideTheRingSelectsNothing() {
+        let ring = geometry()
+        // 22.5° 是槽 1 与槽 2 的交界，靠近圆边处图标之间是空白。
+        let centre = RingPointer.ringCenter(of: ring)
+        let radius = ring.plateRect.width / 2 - 4
+        let radians = 22.5 * Double.pi / 180
+        let point = CGPoint(x: centre.x + sin(radians) * radius,
+                            y: centre.y + cos(radians) * radius)
+        XCTAssertEqual(RingLayout.hitTest(ring, screenPoint: point), .empty, "取点必须在环内空白")
+        let decision = hold(point, ring: ring)
+        XCTAssertNil(decision.slot)
+        XCTAssertEqual(decision.action, .cancel)
+    }
+
+    func testCentreSelectsNothing() {
+        let ring = geometry()
+        let decision = hold(RingPointer.ringCenter(of: ring), ring: ring)
+        XCTAssertNil(decision.slot)
+        XCTAssertEqual(decision.action, .cancel)
+    }
+
+    /// Outside the drawn circle the gesture selects by angle — on this screen, far away, or
+    /// on another display. The menu entry keeps its screen-limited rule, so the two are
+    /// compared on the same point.
+    func testOutsideTheRingSelectsByAngleAtAnyDistance() {
+        let ring = geometry()
+        let centre = RingPointer.ringCenter(of: ring)
+        let probes = [
+            CGPoint(x: 15, y: 960),          // 本屏远处
+            CGPoint(x: centre.x + 5000, y: centre.y),
+            CGPoint(x: centre.x - 3000, y: centre.y - 2000),
+            CGPoint(x: centre.x, y: centre.y - 4000)
+        ]
+        for point in probes {
+            let decision = hold(point, ring: ring)
+            XCTAssertEqual(decision.slot,
+                           RingPointer.slot(at: point, center: centre, slotCount: 8),
+                           "环外任意距离都按角度选槽：\(point)")
+            guard case .launch = decision.action else { return XCTFail("环外应可启动：\(point)") }
+        }
+    }
+
+    /// The circle edge belongs to the inside: a point exactly on it is "in the ring" and
+    /// cancels like the rest of the blank interior; just outside it launches by angle.
+    func testCircleEdgeIsInsideAndJustOutsideIsAngular() {
+        let ring = geometry()
+        let centre = RingPointer.ringCenter(of: ring)
+        let radius = ring.plateRect.width / 2
+        // 边界用 ±1e-3 明确区分两侧：正好落在圆上的点由 panel→local 的坐标舍入决定，
+        // 不假装能判相等（纯半径判定本身由 testCircleBoundaryIsInclusiveAtTheEdge 覆盖）。
+        let justInside = CGPoint(x: centre.x + radius - 1e-3, y: centre.y)
+        let justOutside = CGPoint(x: centre.x + radius + 1e-3, y: centre.y)
+        XCTAssertNil(hold(justInside, ring: ring).slot, "圆内属于环内")
+        XCTAssertEqual(hold(justInside, ring: ring).action, .cancel)
+        guard case .launch(let slot) = hold(justOutside, ring: ring).action else {
+            return XCTFail("圆外应可启动")
+        }
+        XCTAssertEqual(slot, RingPointer.slot(at: justOutside, center: centre, slotCount: 8))
+    }
+
+    /// Sector boundaries outside the ring follow the same half-open rule as everywhere else.
+    func testSectorBoundariesOutsideTheRing() {
+        let ring = geometry()
+        let centre = RingPointer.ringCenter(of: ring)
+        let radius = ring.plateRect.width / 2 + 100
+        // 边界两侧各取 1e-3 度，避免三角函数舍入替规则做决定。
+        for boundary in [22.5, 67.5, 112.5, 337.5] {
+            for (offset, degrees) in [(-1e-3, boundary - 1e-3), (1e-3, boundary + 1e-3)] {
+                let radians = degrees * Double.pi / 180
+                let point = CGPoint(x: centre.x + sin(radians) * radius, y: centre.y + cos(radians) * radius)
+                let expected = RingPointer.slotIndex(degrees: degrees, slotCount: 8)
+                XCTAssertEqual(hold(point, ring: ring).slot, expected,
+                               "边界 \(boundary)° \(offset > 0 ? "外侧" : "内侧")应归 \(expected) 槽")
+            }
+        }
+    }
+
+    /// 3…8 directions outside the ring all resolve to their own slot.
+    func testEverySlotCountResolvesDirectionsOutsideTheRing() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                                          mouse: CGPoint(x: 700, y: 500),
+                                                          screens: [screen],
+                                                          visibleFrames: [visible]))
+            let centre = RingPointer.ringCenter(of: ring)
+            let filled = Array(repeating: true, count: count)
+            let step = 360 / Double(count)
+            for index in 0..<count {
+                let radians = (Double(index) * step) * .pi / 180
+                let point = CGPoint(x: centre.x + sin(radians) * 800, y: centre.y + cos(radians) * 800)
+                XCTAssertEqual(RingPointer.holdSelection(point, geometry: ring, filled: filled).action,
+                               .launch(index), "N=\(count) 环外方向 \(index)")
+            }
+        }
+    }
+
+    func testEmptySlotIconSelectsItsSlotButCancels() {
+        var filled = allFilled
+        filled[2] = false
+        let ring = geometry()
+        let frame = ring.iconFrames[2]
+        let decision = hold(world(CGPoint(x: frame.midX, y: frame.midY), in: ring), ring: ring, filled: filled)
+        XCTAssertEqual(decision.slot, 2)
+        XCTAssertEqual(decision.action, .cancel)
+    }
+
+    /// The release is judged on its own point, never on the last hover: an icon followed by
+    /// the ring's blank interior cancels, while leaving the circle selects by angle.
+    func testReleaseFollowsTheLastPoint() {
+        let ring = geometry()
+        let icon = ring.iconFrames[3]
+        let hovered = hold(world(CGPoint(x: icon.midX, y: icon.midY), in: ring), ring: ring)
+        XCTAssertEqual(hovered.action, .launch(3))
+
+        let insideBlank = hold(inRingBlank(ring), ring: ring)
+        XCTAssertNil(insideBlank.slot, "环内空白不选中")
+        XCTAssertEqual(insideBlank.action, .cancel)
+
+        let outside = CGPoint(x: 15, y: 960)
+        let outsideDecision = hold(outside, ring: ring)
+        XCTAssertEqual(outsideDecision.slot, RingPointer.slot(at: outside,
+                                                              center: RingPointer.ringCenter(of: ring),
+                                                              slotCount: 8))
+        guard case .launch = outsideDecision.action else { return XCTFail("环外应按最后位置启动") }
+    }
+
+    /// Before the first move (and after the highlight is cleared) there is no decision
+    /// yet. The gesture entry must still promise what a release does, and must match the
+    /// copy it shows once a move lands on blank space.
+    func testRestingCopyMatchesTheUnselectedState() {
+        XCTAssertEqual(RingCenter.restingText(mode: .holdToLaunch).action, "松开取消")
+        XCTAssertNil(RingCenter.restingText(mode: .holdToLaunch).title)
+
+        let ring = geometry()
+        let blank = hold(inRingBlank(ring), ring: ring)
+        XCTAssertNil(blank.slot, "环内空白不应选中任何槽")
+        let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: .holdToLaunch)
+        XCTAssertEqual(blankText.action, RingCenter.restingText(mode: .holdToLaunch).action,
+                       "未选中状态在有无 move 时文案必须一致")
+
+        XCTAssertNil(RingCenter.restingText(mode: .angularClick).action, "菜单入口保持安静")
+        XCTAssertNil(RingCenter.restingText(mode: .angularClick).title)
+    }
+
+    func testGestureCentreCopyNeverPromisesAClick() {
+        let ring = geometry()
+
+        let icon = ring.iconFrames[1]
+        let onApp = hold(world(CGPoint(x: icon.midX, y: icon.midY), in: ring), ring: ring)
+        let appText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch)
+        XCTAssertEqual(appText.title, "B")
+        XCTAssertEqual(appText.action, "松开启动")
+
+        var withEmpty = allFilled
+        withEmpty[4] = false
+        let emptyFrame = ring.iconFrames[4]
+        let onEmpty = hold(world(CGPoint(x: emptyFrame.midX, y: emptyFrame.midY), in: ring), ring: ring, filled: withEmpty)
+        let emptyText = RingCenter.text(for: onEmpty, names: names, filled: withEmpty, mode: .holdToLaunch)
+        XCTAssertEqual(emptyText.title, "空位")
+        XCTAssertEqual(emptyText.action, "松开取消")
+
+        let blank = hold(inRingBlank(ring), ring: ring)
+        let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: .holdToLaunch)
+        XCTAssertNil(blankText.title)
+        XCTAssertEqual(blankText.action, "松开取消")
+        XCTAssertEqual(RingCenterText.escapeHint, "Esc 取消")
+    }
+
+    /// The menu entry keeps its click wording and its angular rule.
+    func testAngularModeKeepsItsClickCopyAndRule() {
+        let ring = geometry()
+        let outside = CGPoint(x: 15, y: 960)
+        let decision = RingPointer.decide(outside, activeScreenFrame: screen, geometry: ring, filled: allFilled)
+        guard case .launch(let index) = decision.action else { return XCTFail("菜单入口应可按角度启动") }
+        let text = RingCenter.text(for: decision, names: names, filled: allFilled, mode: .angularClick)
+        XCTAssertEqual(text.title, names[index])
+        XCTAssertEqual(text.action, "点击启动")
+    }
+
+    /// 3–8 slots must all keep the gesture's icon hit and the angular rule working.
+    func testEverySlotCountWorksInBothModes() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                                          mouse: CGPoint(x: 700, y: 500),
+                                                          screens: [screen],
+                                                          visibleFrames: [visible]))
+            let filled = Array(repeating: true, count: count)
+            for index in 0..<count {
+                let frame = ring.iconFrames[index]
+                let centre = world(CGPoint(x: frame.midX, y: frame.midY), in: ring)
+                XCTAssertEqual(RingPointer.holdSelection(centre, geometry: ring, filled: filled).action,
+                               .launch(index), "N=\(count) 槽 \(index) 圆心命中")
+                let corner = world(CGPoint(x: frame.maxX, y: frame.maxY), in: ring)
+                let cornerDecision = RingPointer.holdSelection(corner, geometry: ring, filled: filled)
+                if RingPointer.isInsideDrawnRing(corner, geometry: ring) {
+                    XCTAssertNil(cornerDecision.slot, "N=\(count) 槽 \(index) 方角在环内应空白")
+                } else {
+                    XCTAssertNotNil(cornerDecision.slot, "N=\(count) 槽 \(index) 方角在环外按角度选槽")
+                }
+            }
+        }
+    }
+}
+/// Which input surface may drive the highlight: one per mode, and only while a ring is up.
+final class RingPointerRoutingTests: XCTestCase {
+    func testEachModeHasExactlyOneSource() {
+        XCTAssertEqual(RingPointerRouting.source(for: .angularClick), .overlay)
+        XCTAssertEqual(RingPointerRouting.source(for: .holdToLaunch), .global)
+    }
+
+    func testOnlyTheModesOwnSourceIsAcceptedWhileVisible() {
+        XCTAssertTrue(RingPointerRouting.acceptsMove(from: .overlay, mode: .angularClick, ringVisible: true))
+        XCTAssertFalse(RingPointerRouting.acceptsMove(from: .global, mode: .angularClick, ringVisible: true),
+                       "菜单模式不接受全局 move：旧坐标会覆盖 overlay 的新位置")
+        XCTAssertTrue(RingPointerRouting.acceptsMove(from: .global, mode: .holdToLaunch, ringVisible: true))
+        XCTAssertFalse(RingPointerRouting.acceptsMove(from: .overlay, mode: .holdToLaunch, ringVisible: true),
+                       "手势模式只由全局 move 驱动，overlay 不参与")
+    }
+
+    func testNothingIsAcceptedWhileTheRingIsHidden() {
+        for source in [RingPointerSource.overlay, .global] {
+            for mode in [RingInputMode.angularClick, .holdToLaunch] {
+                XCTAssertFalse(RingPointerRouting.acceptsMove(from: source, mode: mode, ringVisible: false),
+                               "\(source)/\(mode) 在环隐藏时不得更新高亮")
+            }
+        }
     }
 }

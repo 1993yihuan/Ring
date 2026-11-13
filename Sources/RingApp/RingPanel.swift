@@ -44,6 +44,14 @@ final class RingView: NSView {
 
     var geometry: RingGeometry?
     var items: [Item] = []
+    /// Which entry opened the ring: it decides whether the centre promises a click or a
+    /// release. Pushed with the decision so the copy cannot drift from the gesture.
+    var mode: RingInputMode = .angularClick {
+        didSet {
+            guard oldValue != mode else { return }
+            needsDisplay = true
+        }
+    }
     /// The whole pointer decision, pushed by the coordinator: the highlight and the
     /// centre copy are two facts of one value, so the view cannot pair a name with the
     /// wrong verb.
@@ -90,8 +98,11 @@ final class RingView: NSView {
         // the three lines stay inside it instead of running into the icons.
         let scale = min(1, max(0.5, side / 96))
         let text = decision.map {
-            RingCenter.text(for: $0, names: items.map(\.name), filled: items.map(\.isFilled))
-        } ?? RingCenter.text(for: .none, launches: false)
+            RingCenter.text(for: $0,
+                            names: items.map(\.name),
+                            filled: items.map(\.isFilled),
+                            mode: mode)
+        } ?? RingCenter.restingText(mode: mode)
         // Stay inside the centre disc: with three to eight slots the free middle is the
         // disc, and a wider text would reach towards the icons on small rings.
         let width = max(side - 8, 60)

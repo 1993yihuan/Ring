@@ -35,6 +35,9 @@ final class RingOverlayPanel: NSPanel {
 /// the pointer. Nothing is launched on press alone.
 final class RingOverlayView: NSView {
     var onMove: ((CGPoint) -> Void)?
+    /// A press of any button, reported on the down event: while the Option gesture is
+    /// holding, a click must collapse it immediately, not when the button comes up.
+    var onPress: (() -> Void)?
     /// Left button released over this overlay: the click is complete, act on the press point.
     var onRelease: ((CGPoint) -> Void)?
     /// Right or other button released: cancel, never launch.
@@ -113,6 +116,7 @@ final class RingOverlayView: NSView {
 
     override func mouseDown(with event: NSEvent) {
         pending = Pending(kind: .select, point: screenPoint(event))
+        onPress?()
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -131,6 +135,7 @@ final class RingOverlayView: NSView {
 
     override func rightMouseDown(with event: NSEvent) {
         pending = Pending(kind: .cancelRight, point: screenPoint(event))
+        onPress?()
     }
 
     override func rightMouseUp(with event: NSEvent) {
@@ -141,6 +146,7 @@ final class RingOverlayView: NSView {
 
     override func otherMouseDown(with event: NSEvent) {
         pending = Pending(kind: .cancelOther, point: screenPoint(event))
+        onPress?()
     }
 
     override func otherMouseUp(with event: NSEvent) {

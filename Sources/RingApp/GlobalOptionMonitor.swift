@@ -21,11 +21,18 @@ final class GlobalOptionMonitor {
     private var recoveryAttempts = 0
 
     private(set) var health: Health = .stopped
-    var onEvent: ((InputEvent) -> Void)?
+    /// The input event plus the pointer position captured **with that event**: a release
+    /// must be judged where it happened, not from a later pointer reading.
+    var onEvent: ((InputEvent, CGPoint) -> Void)?
     var onEscape: (() -> Void)?
     /// Mouse presses are reported separately: a press inside the Ring panel belongs
     /// to the panel, a press outside it means the user clicked away.
     var onMouseDown: ((CGPoint?) -> Void)?
+    /// Global pointer moves, forwarded only while the gesture needs them: the ring's own
+    /// screen cannot see the pointer once it leaves for another display.
+    var onPointerMove: ((CGPoint) -> Void)?
+    /// Read on the tap thread; false keeps the mouse-move callback from doing any work.
+    var forwardsPointerMoves = false
     var onTick: ((TimeInterval) -> Void)?
     var onHealthChange: ((Health) -> Void)?
 
@@ -42,6 +49,7 @@ final class GlobalOptionMonitor {
 
         let mask: CGEventMask = (1 << CGEventType.flagsChanged.rawValue)
             | (1 << CGEventType.keyDown.rawValue)
+            | (1 << CGEventType.mouseMoved.rawValue)
             | (1 << CGEventType.leftMouseDown.rawValue)
             | (1 << CGEventType.rightMouseDown.rawValue)
             | (1 << CGEventType.otherMouseDown.rawValue)
@@ -115,6 +123,13 @@ final class GlobalOptionMonitor {
         NSEvent(cgEvent: event)?.locationInWindow
     }
 
+    /// The point to attach to an input event. Falls back to reading the pointer **right
+    /// here, in the tap callback** — still at event time — when AppKit cannot build an
+    /// NSEvent for this event. It never defers to a later read on the main queue.
+    static func eventPoint(of event: CGEvent) -> CGPoint {
+        mousePoint(of: event) ?? NSEvent.mouseLocation
+    }
+
     private func handle(type: CGEventType, event: CGEvent) {
         switch type {
         case .tapDisabledByTimeout:
@@ -131,13 +146,22 @@ final class GlobalOptionMonitor {
             // Mapping lives in RingCore so the "pure Option only" rule is unit-tested
             // with real CGEventFlags instead of a boolean decided here.
             emit(ModifierNormalizer.event(keyCode: event.getIntegerValueField(.keyboardEventKeycode),
-                                          flags: event.flags))
+                                          flags: event.flags),
+                 point: Self.eventPoint(of: event))
         case .keyDown:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             if keyCode == Self.escapeKeyCode {
                 onEscape?()
             }
-            emit(.interference)
+            emit(.interference, point: Self.eventPoint(of: event))
+        case .mouseMoved:
+            // Passive listener: nothing is blocked or rewritten. The flag check happens on
+            // the tap thread so an idle app does no queuing at all.
+            guard forwardsPointerMoves else { return }
+            let point = Self.eventPoint(of: event)
+            DispatchQueue.main.async { [weak self] in
+                self?.onPointerMove?(point)
+            }
         case .leftMouseDown, .rightMouseDown, .otherMouseDown:
             // Snapshot the event's own location: reading NSEvent.mouseLocation inside the
             // async block would describe where the pointer is when it runs, not where the
@@ -149,9 +173,9 @@ final class GlobalOptionMonitor {
         }
     }
 
-    private func emit(_ event: InputEvent) {
+    private func emit(_ event: InputEvent, point: CGPoint) {
         DispatchQueue.main.async { [weak self] in
-            self?.onEvent?(event)
+            self?.onEvent?(event, point)
         }
     }
 }

@@ -13,6 +13,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var overlayView: RingOverlayView?
     /// The screen the ring was opened on: the only place a click may launch or cancel.
     private var activeScreenFrame: CGRect?
+    /// Which entry opened the ring. The Option gesture releases to launch; the menu entry
+    /// clicks, and keeps the whole-screen angular rule.
+    private var inputMode: RingInputMode = .angularClick
+    /// A click collapsed the gesture but its release has not been consumed yet: the overlay
+    /// stays until then so that release cannot reach the app behind it.
+    private var keepingOverlayForRelease = false
     private let panelContainer = NSView()
     private let panelBlur = NSVisualEffectView()
     private var ringView: RingView?
@@ -61,9 +67,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     // MARK: - Trigger wiring
 
     private func installMonitor() {
-        monitor.onEvent = { [weak self] event in self?.handle(event) }
+        monitor.onEvent = { [weak self] event, point in self?.handle(event, at: point) }
         monitor.onEscape = { [weak self] in self?.cancelRing() }
         monitor.onMouseDown = { [weak self] point in self?.handleMouseDown(at: point) }
+        monitor.onPointerMove = { [weak self] point in self?.pointerMoved(to: point, from: .global) }
         monitor.onTick = { [weak self] time in self?.handleTick(time) }
         monitor.onHealthChange = { [weak self] health in self?.healthChanged(health) }
         if !monitor.start() {
@@ -72,15 +79,34 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         refreshPermissionStatus()
     }
 
-    private func handle(_ event: InputEvent) {
+    private func handle(_ event: InputEvent, at point: CGPoint) {
         // Any unrelated key or modifier change breaks a pending double tap; when the
         // ring is open it also means the user moved on, so the ring closes.
-        if event == .interference, session.isVisible {
-            cancelRing()
+        if event == .interference {
+            if session.isVisible {
+                cancelRing()
+            } else {
+                _ = recognizer.handle(event, at: now())
+            }
             return
         }
-        if case .triggered = recognizer.handle(event, at: now()) {
-            showRing()
+        switch recognizer.handle(event, at: now()) {
+        case .triggered:
+            // A ring already on screen (opened by the menu) must not be retargeted: its
+            // clicks would silently become cancels and an Option release would launch.
+            guard !session.isVisible else { return }
+            // Second press is down: show immediately instead of waiting for the release.
+            showRing(mode: .holdToLaunch)
+        case .released:
+            // Act on where the release happened, not on the last hover move.
+            if inputMode == .holdToLaunch, session.isVisible {
+                releaseSelection(at: point)
+            }
+        case .reset:
+            // Interference, the other side arriving, or a stray press collapses the gesture.
+            if inputMode == .holdToLaunch { cancelRing() }
+        case .none:
+            break
         }
     }
 
@@ -119,17 +145,34 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         if health == .tapDisabled {
             statusItem?.button?.toolTip = "Ring：全局监听已被系统停用，可在设置中重试"
         }
+        // The tap is the only global source for Esc and the Option release. Without it the
+        // overlay's own click is the remaining way out, so close now instead of leaving a
+        // ring that can neither launch nor be dismissed from the keyboard.
+        if health != .running, session.isVisible {
+            cancelRing()
+        }
     }
 
     // MARK: - Ring panel
 
-    private func showRing() {
+    private func showRing(mode: RingInputMode) {
         guard session.trigger() else { return }
+        // The mode belongs to this visible ring, so it is set only once the ring is really
+        // up. A refused trigger (ring already visible) returns above and changes nothing.
+        inputMode = mode
+        keepingOverlayForRelease = false
         guard let current = currentGeometry() else {
+            // Nothing was shown, so no global pointer work may keep running for a ring that
+            // does not exist.
+            monitor.forwardsPointerMoves = false
             session.cancel()
+            inputMode = .angularClick
             NSLog("Ring: 当前屏幕区域无法容纳环形")
             return
         }
+        // Only now that the ring is really up: the gesture follows the pointer on every
+        // display, the menu entry stays on its own screen.
+        monitor.forwardsPointerMoves = (mode == .holdToLaunch)
         activeScreenFrame = current.frame
         presentPanel(geometry: current.geometry)
         presentOverlay(on: current.frame)
@@ -158,6 +201,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                           isFilled: slot.app != nil)
         }
         view.decision = nil
+        view.mode = inputMode
         ringView = view
 
         panel.setFrame(geometry.panelFrame, display: true)
@@ -193,11 +237,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private func presentOverlay(on screenFrame: CGRect) {
         let view = overlayView ?? RingOverlayView()
         view.reset()
-        view.onMove = { [weak self] point in self?.pointerMoved(to: point) }
-        view.onRelease = { [weak self] point in self?.pointerClicked(at: point) }
-        view.onCancelRelease = { [weak self] in self?.cancelRing() }
+        view.onMove = { [weak self] point in self?.pointerMoved(to: point, from: .overlay) }
+        view.onPress = { [weak self] in self?.overlayPressed() }
+        view.onRelease = { [weak self] point in self?.overlayReleased(at: point) }
+        view.onCancelRelease = { [weak self] in self?.overlayCancelReleased() }
         view.onAbortedPress = { [weak self] in self?.cancelRing() }
-        view.onPointerExit = { [weak self] in self?.clearHighlight() }
+        view.onPointerExit = { [weak self] in self?.pointerExitedOverlay() }
         overlay.contentView = view
         overlay.setFrame(screenFrame, display: false)
         overlayView = view
@@ -205,12 +250,77 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         view.frame = NSRect(origin: .zero, size: screenFrame.size)
     }
 
-    private func pointerMoved(to point: CGPoint) {
-        guard let decision = currentDecision(at: point) else { return }
+    /// One move, from one named source. `RingPointerRouting` decides whether that source may
+    /// drive the highlight in the current mode, so a queued global move cannot overwrite the
+    /// overlay's newer position (or the other way round).
+    private func pointerMoved(to point: CGPoint, from source: RingPointerSource) {
+        guard RingPointerRouting.acceptsMove(from: source, mode: inputMode, ringVisible: session.isVisible),
+              let decision = currentDecision(at: point) else { return }
         ringView?.decision = decision
     }
 
+    /// The release decides from where the release happened. An unknown position can only
+    /// cancel: a launch is never inferred from a stale highlight.
+    private func releaseSelection(at point: CGPoint) {
+        // The release point was captured with the release event; without a ring to judge
+        // it against there is nothing to launch. The ring's own circle and centre decide —
+        // the gesture is not clipped to the screen the ring was opened on.
+        guard let geometry = ringView?.geometry else {
+            cancelRing()
+            return
+        }
+        let filled = session.slots.map { $0.app != nil }
+        switch RingPointer.holdSelection(point, geometry: geometry, filled: filled).action {
+        case .launch(let index):
+            selectSlot(index)
+        case .cancel, .otherScreen:
+            cancelRing()
+        }
+    }
+
+    /// A press while the gesture is holding ends the gesture immediately. The overlay is
+    /// kept until that press's release has been consumed, so the release cannot land on the
+    /// app behind it; the ring itself is already gone.
+    private func overlayPressed() {
+        guard inputMode == .holdToLaunch, session.isVisible else { return }
+        keepingOverlayForRelease = true
+        session.cancel()
+        monitor.forwardsPointerMoves = false
+        panel.orderOut(nil)
+        ringView?.decision = nil
+        activeScreenFrame = nil
+        recognizer.reset()
+    }
+
+    private func overlayReleased(at point: CGPoint) {
+        if keepingOverlayForRelease {
+            finishKeptOverlay()
+            return
+        }
+        pointerClicked(at: point)
+    }
+
+    private func overlayCancelReleased() {
+        if keepingOverlayForRelease {
+            finishKeptOverlay()
+            return
+        }
+        cancelRing()
+    }
+
+    private func finishKeptOverlay() {
+        keepingOverlayForRelease = false
+        overlay.orderOut(nil)
+        inputMode = .angularClick
+        monitor.forwardsPointerMoves = false
+    }
+
     private func pointerClicked(at point: CGPoint) {
+        if inputMode == .holdToLaunch {
+            // The gesture commits on release; a click means the user is not doing that.
+            cancelRing()
+            return
+        }
         guard let decision = currentDecision(at: point) else { return }
         switch decision.action {
         case .launch(let index):
@@ -223,13 +333,29 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func currentDecision(at point: CGPoint) -> RingPointerDecision? {
-        guard let geometry = ringView?.geometry, let screenFrame = activeScreenFrame else { return nil }
+        guard let geometry = ringView?.geometry else { return nil }
         let filled = session.slots.map { $0.app != nil }
-        return RingPointer.decide(point, activeScreenFrame: screenFrame, geometry: geometry, filled: filled)
+        switch inputMode {
+        case .holdToLaunch:
+            // The gesture follows the pointer across displays, so its screen is irrelevant:
+            // only the drawn circle, the icons and the angle matter.
+            return RingPointer.holdSelection(point, geometry: geometry, filled: filled)
+        case .angularClick:
+            guard let screenFrame = activeScreenFrame else { return nil }
+            return RingPointer.decide(point, activeScreenFrame: screenFrame, geometry: geometry, filled: filled)
+        }
     }
 
     private func clearHighlight() {
         ringView?.decision = nil
+    }
+
+    /// Leaving the overlay matters only for the menu entry, which is limited to this screen.
+    /// The gesture keeps following the pointer through the global move events, so clearing
+    /// here would drop a highlight that the release would still act on.
+    private func pointerExitedOverlay() {
+        guard inputMode == .angularClick else { return }
+        clearHighlight()
     }
 
     private func selectSlot(_ index: Int) {
@@ -261,6 +387,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         overlay.orderOut(nil)
         ringView?.decision = nil
         activeScreenFrame = nil
+        keepingOverlayForRelease = false
+        // Global pointer tracking exists only to follow the gesture across displays.
+        monitor.forwardsPointerMoves = false
+        // No ring is on screen any more: the next open states its own mode.
+        inputMode = .angularClick
     }
 
     private func presentErrorAlert(_ message: String) {
@@ -332,7 +463,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         if session.isVisible {
             cancelRing()
         } else {
-            showRing()
+            showRing(mode: .angularClick)
         }
     }
 
