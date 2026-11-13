@@ -2,24 +2,11 @@ import CoreGraphics
 import Foundation
 
 public struct RingMetrics: Sendable, Equatable {
-    public var iconSize: CGFloat
-    public var iconSpacing: CGFloat
-    public var padding: CGFloat
-    /// Radius the middle must keep free for the centre cancels target and its three lines.
-    /// Without it a three-slot ring would leave only a few points between the icons.
-    public var minimumCentreRadius: CGFloat
-    /// Below this the ring stays usable by shrinking, but icons get hard to hit.
+    /// Below this the ring is refused instead of drawn so small that the icons cannot be
+    /// aimed at.
     public var hardMinIconSize: CGFloat
 
-    public init(iconSize: CGFloat = 52,
-                iconSpacing: CGFloat = 8,
-                padding: CGFloat = 14,
-                minimumCentreRadius: CGFloat = 40,
-                hardMinIconSize: CGFloat = 8) {
-        self.iconSize = iconSize
-        self.iconSpacing = iconSpacing
-        self.padding = padding
-        self.minimumCentreRadius = minimumCentreRadius
+    public init(hardMinIconSize: CGFloat = 8) {
         self.hardMinIconSize = hardMinIconSize
     }
 }
@@ -31,14 +18,15 @@ public struct RingGeometry: Sendable, Equatable {
     public var iconFrames: [CGRect]
     /// Panel-local cancel target (the middle of the ring).
     public var cancelFrame: CGRect
+    /// Width of one clickable icon frame.
     public var iconSize: CGFloat
-    public var isMinimal: Bool
+    /// Clear margin between the plate and the panel edge: the room the drop shadows need.
+    public var plateInset: CGFloat
 
-    /// The circular plate inside the square panel, in panel-local coordinates. The blur
-    /// mask, its corner radius and the drawn edge all come from this one rect.
+    /// The circular plate inside the square panel, in panel-local coordinates. The band mask
+    /// and every hairline come from this one rect.
     public var plateRect: CGRect {
-        let inset: CGFloat = 5
-        let side = min(panelFrame.width, panelFrame.height) - inset * 2
+        let side = min(panelFrame.width, panelFrame.height) - plateInset * 2
         return CGRect(x: (panelFrame.width - side) / 2,
                       y: (panelFrame.height - side) / 2,
                       width: side,
@@ -103,75 +91,62 @@ public enum RingLayout {
         guard slotCount > 0,
               screens.count == visibleFrames.count,
               let index = screenIndex(for: mouse, screens: screens) else { return nil }
-        let visible = visibleFrames[index]
-
-        var iconSize = metrics.iconSize
-        var isMinimal = false
-        while true {
-            if let geometry = layout(slotCount: slotCount,
-                                     mouse: mouse,
-                                     visible: visible,
-                                     iconSize: iconSize,
-                                     metrics: metrics) {
-                var result = geometry
-                result.isMinimal = isMinimal
-                return result
-            }
-            guard iconSize > metrics.hardMinIconSize else { return nil }
-            iconSize = max(metrics.hardMinIconSize, iconSize - 6)
-            isMinimal = true
-        }
+        return layout(slotCount: slotCount,
+                      mouse: mouse,
+                      visible: visibleFrames[index],
+                      metrics: metrics)
     }
 
+    /// The website's ring is one fixed set of proportions; the screen only decides how many
+    /// points one canvas unit is worth. Drawing and hit frames are scaled by the same unit,
+    /// so they cannot drift apart.
     private static func layout(slotCount: Int,
                                mouse: CGPoint,
                                visible: CGRect,
-                               iconSize: CGFloat,
                                metrics: RingMetrics) -> RingGeometry? {
         let count = max(slotCount, 1)
-        let scale = iconSize / metrics.iconSize
-        let spacing = max(2, metrics.iconSpacing * scale)
-        let padding = max(3, metrics.padding * scale)
-        // Adjacent icons must not touch…
-        let chordRadius: CGFloat = count == 1
-            ? iconSize * 0.8
-            : (iconSize + spacing) / (2 * sin(CGFloat.pi / CGFloat(count)))
-        // …and the middle must stay free for the centre target and its lines. With the
-        // chord rule alone, three or four slots would leave almost no middle at all.
-        let centreRadius = metrics.minimumCentreRadius * scale
-        let radius = max(chordRadius, centreRadius + iconSize / 2 + spacing)
-        let body = 2 * radius + iconSize + padding * 2
-        let size = CGSize(width: body, height: body)
+        let nominal = 2 * (RingPresentation.outerRadius + RingPresentation.shadowInset)
+        // The designed size is one constant; a screen too small for it only shrinks further.
+        let unit = min(RingPresentation.defaultScale, min(visible.width, visible.height) / nominal)
+        let drawnIcon = RingPresentation.iconSize * unit
+        guard drawnIcon >= metrics.hardMinIconSize else { return nil }
+
+        let side = nominal * unit
+        let size = CGSize(width: side, height: side)
         guard size.width <= visible.width, size.height <= visible.height else { return nil }
 
         let clampedX = min(max(mouse.x - size.width / 2, visible.minX), visible.maxX - size.width)
         let clampedY = min(max(mouse.y - size.height / 2, visible.minY), visible.maxY - size.height)
         let panelFrame = CGRect(origin: CGPoint(x: clampedX, y: clampedY), size: size)
 
-        let center = CGPoint(x: body / 2, y: body / 2)
+        let centre = CGPoint(x: side / 2, y: side / 2)
+        let hitSide = RingPresentation.hitSide(drawnIcon: drawnIcon)
+        let iconRadius = RingPresentation.iconRadius * unit
         var iconFrames: [CGRect] = []
         iconFrames.reserveCapacity(count)
         for slot in 0..<count {
             let offset = slotOffset(slot, count: count)
-            let iconCenter = CGPoint(x: center.x + offset.x * radius,
-                                     y: center.y + offset.y * radius)
-            iconFrames.append(CGRect(x: iconCenter.x - iconSize / 2,
-                                     y: iconCenter.y - iconSize / 2,
-                                     width: iconSize,
-                                     height: iconSize))
+            let iconCenter = CGPoint(x: centre.x + offset.x * iconRadius,
+                                     y: centre.y + offset.y * iconRadius)
+            iconFrames.append(CGRect(x: iconCenter.x - hitSide / 2,
+                                     y: iconCenter.y - hitSide / 2,
+                                     width: hitSide,
+                                     height: hitSide))
         }
 
-        let cancelSide = max(iconSize * 1.2, radius * 2 - iconSize - spacing)
-        let cancelFrame = CGRect(x: center.x - cancelSide / 2,
-                                 y: center.y - cancelSide / 2,
+        // The centre cancels across the whole see-through hole, so the target the user aims
+        // at is the opening they can actually see.
+        let cancelSide = 2 * RingPresentation.holeRadius * unit
+        let cancelFrame = CGRect(x: centre.x - cancelSide / 2,
+                                 y: centre.y - cancelSide / 2,
                                  width: cancelSide,
                                  height: cancelSide)
 
         return RingGeometry(panelFrame: panelFrame,
                             iconFrames: iconFrames,
                             cancelFrame: cancelFrame,
-                            iconSize: iconSize,
-                            isMinimal: false)
+                            iconSize: hitSide,
+                            plateInset: RingPresentation.shadowInset * unit)
     }
 
     public static func hitTest(_ geometry: RingGeometry, screenPoint: CGPoint) -> RingHit {
@@ -182,19 +157,5 @@ public enum RingLayout {
         }
         if geometry.cancelFrame.contains(local) { return .cancel }
         return .empty
-    }
-}
-
-public enum RingGlyph {
-    /// The disc drawn inside one icon's hit frame. The hovered disc grows and lifts away
-    /// from the centre but stays inside the frame, so no visible pixel is unclickable and
-    /// nothing is clipped by the panel.
-    public static func tileRect(hitFrame: CGRect, centre: CGPoint, isHovered: Bool) -> CGRect {
-        guard isHovered else { return hitFrame.insetBy(dx: 6, dy: 6) }
-        let tile = hitFrame.insetBy(dx: 3, dy: 3)
-        let dx = tile.midX - centre.x
-        let dy = tile.midY - centre.y
-        let length = max((dx * dx + dy * dy).squareRoot(), 1)
-        return tile.offsetBy(dx: dx / length * 2, dy: dy / length * 2)
     }
 }

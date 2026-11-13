@@ -2,257 +2,93 @@ import AppKit
 import RingCore
 import SwiftUI
 
-/// The settings sheet's two boards. The draft asks for a near-white cool preview board
-/// with a pale blue ring line, and a faint warm permission card. The semantic colour these
-/// used before (.underPageBackgroundColor) really resolves to #969696 at 90% in light
-/// aqua — measured with build/settings-color-fix/probe-colors — so the boards rendered mid
-/// grey instead of near white. Fixed sRGB values keep the intended look in either system
-/// appearance without forcing the window's appearance.
-enum BoardPalette {
-    struct Board {
-        let fill: Color
-        let stroke: Color
-    }
-
-    static func preview(_ scheme: ColorScheme) -> Board {
-        scheme == .dark
-            ? Board(fill: Color(.sRGB, red: 0.106, green: 0.118, blue: 0.129, opacity: 1),
-                    stroke: Color(.sRGB, red: 0.208, green: 0.259, blue: 0.302, opacity: 1))
-            : Board(fill: Color(.sRGB, red: 0.969, green: 0.976, blue: 0.984, opacity: 1),
-                    stroke: Color(.sRGB, red: 0.776, green: 0.851, blue: 0.910, opacity: 1))
-    }
-
-    static func permission(_ scheme: ColorScheme) -> Board {
-        scheme == .dark
-            ? Board(fill: Color(.sRGB, red: 0.125, green: 0.114, blue: 0.102, opacity: 1),
-                    stroke: Color(.sRGB, red: 0.231, green: 0.204, blue: 0.169, opacity: 1))
-            : Board(fill: Color(.sRGB, red: 0.988, green: 0.973, blue: 0.953, opacity: 1),
-                    stroke: Color(.sRGB, red: 0.906, green: 0.863, blue: 0.800, opacity: 1))
-    }
+/// One scale for the whole window. Every gap is a multiple of 4pt so the two columns,
+/// the permission card and the footer line up.
+private enum Layout {
+    static let windowPadding: CGFloat = 24
+    static let sectionSpacing: CGFloat = 16
+    static let cardPadding: CGFloat = 20
+    static let cardCorner: CGFloat = 12
+    static let previewWidth: CGFloat = 320
+    static let rowHeight: CGFloat = 48
+    static let iconSize: CGFloat = 28
+    static let dragHandleWidth: CGFloat = 12
+    static let numberWidth: CGFloat = 20
+    static let footerMinHeight: CGFloat = 44
 }
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
-    @Environment(\.colorScheme) private var colorScheme
-
-    private static let rowHeight: CGFloat = 24
-    /// An .inset List keeps 10pt above and below its rows.
-    private static let listChrome: CGFloat = 20
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .top, spacing: 16) {
+        // The page scrolls instead of demanding a window taller than the screen. Without
+        // this the whole layout reports a minimum height (a 1090 pt display got 1185 pt),
+        // and the window both opens past the screen and cannot be dragged back inside.
+        // \`minHeight\` keeps the page filling a large window exactly as before; it only
+        // matters when the window is shorter than the content.
+        GeometryReader { proxy in
+            ScrollView(.vertical) {
+                page
+                    .frame(minHeight: proxy.size.height)
+            }
+        }
+        // A short screen must be able to hold the smallest window too: the floor is the
+        // design minimum capped by the screen the page is on.
+        .frame(minWidth: minimumSize.width, minHeight: minimumSize.height)
+        .background(Color(nsColor: .windowBackgroundColor))
+        // The layout transition is the only motion here, and it is the user's to refuse.
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.visibleSlotCount)
+    }
+
+    private var minimumSize: CGSize {
+        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+            ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+        return SettingsWindowGeometry.minimumSize(fitting: visible)
+    }
+
+    private var page: some View {
+        VStack(spacing: Layout.sectionSpacing) {
+            HStack(alignment: .top, spacing: Layout.sectionSpacing) {
+                RingPreviewCard(slots: model.visibleSlots)
+                    .frame(width: Layout.previewWidth)
+                // The list takes the growing half: a shorter window scrolls it instead of
+                // squeezing the rows or leaving a hole under the card.
+                RingSlotsCard(model: model)
+                    .frame(maxHeight: .infinity)
+            }
+            .frame(maxHeight: .infinity)
+            InputPermissionCard(model: model)
+            SettingsFooterView(model: model)
+        }
+        .padding(Layout.windowPadding)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// MARK: - Preview column
+
+/// The ring as the user will meet it, drawn from the same slots and the same
+/// `RingLayout.slotOffset` the real panel uses, so the two cannot drift apart.
+private struct RingPreviewCard: View {
+    let slots: [Slot]
+
+    var body: some View {
+        SettingsCard {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("环形预览")
+                    .font(.system(size: 15, weight: .semibold))
+                SlotRingPreview(slots: slots)
+                    .aspectRatio(1, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("环形预览")
-                        .font(.system(size: 13, weight: .semibold))
-                    SlotRingPreview(slots: model.visibleSlots)
-                        .frame(width: 200, height: 200)
-                    Text("双击 Option，快速启动")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                    Text("拖动右侧列表，调整环形位置")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                    Text("连续按两次同一侧 Option，快速打开环形启动器")
+                    Text("按住第二次 Option 时移动指针选择，松开启动")
                 }
-                slotList
-            }
-            permissionCard
-            footer
-        }
-        .padding(16)
-        .frame(width: 620, alignment: .leading)
-    }
-
-    // MARK: - Slots
-
-    /// Only the visible prefix counts: a hidden app is not "configured" on the ring.
-    private var filledCount: Int {
-        model.visibleSlots.filter { $0.app != nil }.count
-    }
-
-    private var slotList: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Text("环形槽位")
-                    .font(.system(size: 13, weight: .semibold))
-                Spacer()
-                Text("已配置 \(filledCount) / \(model.visibleSlotCount)")
-                    .font(.system(size: 11, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            HStack(spacing: 8) {
-                Text("可见位置数")
-                    .font(.system(size: 12))
-                Picker("可见位置数", selection: Binding(get: { model.visibleSlotCount },
-                                                      set: { model.setVisibleSlotCount($0) })) {
-                    ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
-                        Text("\(count)").tag(count)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 240)
-                Spacer()
-            }
-            Text("拖动排序；移除后保留空位，编号与左侧环一致。减少数量只隐藏，调大可恢复。")
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-            // Tall enough for every visible row: scrolling for the main list would hide
-            // a slot the preview is showing.
-            List {
-                ForEach(Array(model.visibleSlots.enumerated()), id: \.element.id) { index, slot in
-                    row(index: index, slot: slot)
-                        .frame(height: Self.rowHeight)
-                        // Without this AppKit adds 8pt per row and the八行 no longer fit.
-                        .listRowInsets(EdgeInsets())
-                }
-                .onMove { source, destination in
-                    model.move(from: source, to: destination)
-                }
-            }
-            .listStyle(.inset)
-            .environment(\.defaultMinListRowHeight, Self.rowHeight)
-            .frame(height: CGFloat(model.visibleSlotCount) * Self.rowHeight + Self.listChrome)
-        }
-    }
-
-    private func row(index: Int, slot: Slot) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal")
-                .font(.system(size: 10))
-                .foregroundStyle(.tertiary)
-                .help("拖动排序")
-            Text("\(index + 1)")
-                .font(.system(size: 11, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .frame(width: 16, alignment: .trailing)
-            appIcon(for: slot.app)
-                .frame(width: 20, height: 20)
-            Text(slot.app?.displayName ?? "空位")
-                .font(.system(size: 12))
-                .foregroundStyle(slot.app == nil ? Color.secondary : Color.primary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .help(slot.app?.displayName ?? "空位")
-            Spacer(minLength: 8)
-            if slot.app == nil {
-                Button("添加…") { model.chooseApp(at: index) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-            } else {
-                Button("替换…") { model.chooseApp(at: index) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-                Button("移除") { model.removeApp(at: index) }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func appIcon(for reference: AppReference?) -> some View {
-        if let path = reference?.path {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-                .resizable()
-        } else {
-            Image(systemName: "app.dashed")
-                .resizable()
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    // MARK: - Permissions
-
-    private var permissionCard: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 8) {
-                Image(systemName: model.status.access == .granted ? "checkmark.shield" : "exclamationmark.shield")
-                    .font(.system(size: 12))
-                    .foregroundStyle(model.status.access == .granted ? Color.green : Color.orange)
-                Text("输入监控权限")
-                    .font(.system(size: 12, weight: .semibold))
-                statusPill
-                Spacer()
-                Button("检查权限") { model.refreshPermission() }
-                    .font(.system(size: 11))
-                Button("请求权限") { model.requestPermission() }
-                    .font(.system(size: 11))
-            }
-            Text(model.status.detail)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if model.status.showsOpenSettings || model.status.showsRetryListener {
-                HStack(spacing: 8) {
-                    if model.status.showsOpenSettings {
-                        Button("打开系统设置（输入监控）") { model.openInputMonitoringSettings() }
-                            .font(.system(size: 11))
-                    }
-                    if model.status.showsRetryListener {
-                        Button("重试监听") { model.retryListener() }
-                            .font(.system(size: 11))
-                    }
-                    Spacer()
-                }
             }
-            if let message = model.permissionMessage {
-                Text(message)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.blue)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-        .padding(10)
-        .background(RoundedRectangle(cornerRadius: 10).fill(BoardPalette.permission(colorScheme).fill))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(BoardPalette.permission(colorScheme).stroke))
-    }
-
-    /// Access and listener health in one word, so "already granted but the tap died"
-    /// never reads as "no permission".
-    private var statusPill: some View {
-        let label: String
-        let color: Color
-        switch (model.status.access, model.status.listener) {
-        case (.granted, .running):
-            label = "已开启"
-            color = .green
-        case (.granted, _):
-            label = "已开启，监听未运行"
-            color = .orange
-        case (.notGranted, _):
-            label = "未开启"
-            color = .orange
-        }
-        return Text(label)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(Capsule().fill(color.opacity(0.14)))
-            // The longest state ("已开启，监听未运行") must not be squeezed by the buttons.
-            .fixedSize(horizontal: true, vertical: false)
-    }
-
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack(spacing: 10) {
-            Button("打开配置目录") { model.revealConfiguration() }
-                .buttonStyle(.link)
-                .font(.system(size: 11))
-            if let error = model.lastError {
-                Text(error)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.red)
-                    .lineLimit(1)
-            }
-            Spacer()
-            Button("保存") { model.save() }
-                .keyboardShortcut("s")
-                .buttonStyle(.borderedProminent)
         }
     }
 }
@@ -260,40 +96,38 @@ struct SettingsView: View {
 /// The same slot order the real ring uses, taken from RingLayout so the preview, the
 /// list numbers and the panel cannot drift apart.
 struct SlotRingPreview: View {
-    @Environment(\.colorScheme) private var colorScheme
     let slots: [Slot]
 
     var body: some View {
         GeometryReader { proxy in
-            let radius = min(proxy.size.width, proxy.size.height) * 0.36
+            let radius = min(proxy.size.width, proxy.size.height) * 0.33
             ZStack {
                 Circle()
-                    .stroke(BoardPalette.preview(colorScheme).stroke, lineWidth: 1)
+                    .stroke(Color.accentColor.opacity(0.45), lineWidth: 1.5)
                     .frame(width: radius * 2, height: radius * 2)
                     .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
                 ForEach(Array(slots.enumerated()), id: \.element.id) { index, slot in
                     let offset = RingLayout.slotOffset(index, count: slots.count)
                     tile(index: index, slot: slot)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 38, height: 38)
                         // SwiftUI's y axis points down, the layout's points up.
                         .position(x: proxy.size.width / 2 + offset.x * radius,
                                   y: proxy.size.height / 2 - offset.y * radius)
                 }
             }
         }
-        .background(RoundedRectangle(cornerRadius: 12).fill(BoardPalette.preview(colorScheme).fill))
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(BoardPalette.preview(colorScheme).stroke))
+        .accessibilityElement(children: .contain)
     }
 
     private func tile(index: Int, slot: Slot) -> some View {
         ZStack {
             Circle()
-                .fill(Color(nsColor: .controlBackgroundColor))
-                .overlay(Circle().stroke(Color(nsColor: .separatorColor)))
+                .fill(Color.primary.opacity(0.05))
+                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12)))
             if let path = slot.app?.path {
                 Image(nsImage: NSWorkspace.shared.icon(forFile: path))
                     .resizable()
-                    .frame(width: 22, height: 22)
+                    .frame(width: 24, height: 24)
             } else {
                 Image(systemName: "plus")
                     .font(.system(size: 11, weight: .light))
@@ -305,12 +139,293 @@ struct SlotRingPreview: View {
                 .font(.system(size: 8, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .padding(1)
-                .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
+                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
                 .offset(x: 3, y: -3)
         }
         .help(slot.app?.displayName ?? "空位 \(index + 1)")
     }
 }
+
+// MARK: - Slots column
+
+private struct RingSlotsCard: View {
+    @ObservedObject var model: SettingsModel
+
+    /// Only the visible prefix counts: a hidden app is not "configured" on the ring.
+    private var filledCount: Int {
+        model.visibleSlots.filter { $0.app != nil }.count
+    }
+
+    var body: some View {
+        SettingsCard(stretchesVertically: true) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 8) {
+                    Text("环形槽位")
+                        .font(.system(size: 15, weight: .semibold))
+                    Spacer(minLength: 8)
+                    Text("已配置 \(filledCount) / \(model.visibleSlotCount)")
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                }
+                HStack(spacing: 12) {
+                    Text("可见位置数")
+                        .font(.system(size: 13))
+                    Picker("可见位置数", selection: Binding(get: { model.visibleSlotCount },
+                                                          set: { model.setVisibleSlotCount($0) })) {
+                        ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
+                            Text("\(count)").tag(count)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    // A narrow window narrows the picker instead of wrapping the label
+                    // beside it into a vertical stack of characters.
+                    .frame(minWidth: 160, idealWidth: 240, maxWidth: 240)
+                    Spacer(minLength: 0)
+                }
+                slotList
+                Text("拖动排序；移除后保留空位，编号与左侧环一致。减少数量只隐藏，调大可恢复。")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// A scrolling list rather than one sized to the slot count: the window may be short,
+    /// and a row that cannot be reached is worse than a row out of sight.
+    private var slotList: some View {
+        List {
+            ForEach(Array(model.visibleSlots.enumerated()), id: \.element.id) { index, slot in
+                SlotRow(index: index, slot: slot, model: model)
+                    .frame(minHeight: Layout.rowHeight)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 8))
+            }
+            .onMove { source, destination in
+                model.move(from: source, to: destination)
+            }
+        }
+        .listStyle(.inset)
+        .scrollContentBackground(.hidden)
+        .environment(\.defaultMinListRowHeight, Layout.rowHeight)
+        .frame(minHeight: Layout.rowHeight * 3)
+    }
+}
+
+private struct SlotRow: View {
+    let index: Int
+    let slot: Slot
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal")
+                .font(.system(size: 11))
+                .foregroundStyle(.tertiary)
+                .frame(width: Layout.dragHandleWidth)
+                .help("拖动排序")
+            Text("\(index + 1)")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(.secondary)
+                .frame(width: Layout.numberWidth, alignment: .trailing)
+            appIcon
+                .frame(width: Layout.iconSize, height: Layout.iconSize)
+            Text(slot.app?.displayName ?? "空位")
+                .font(.system(size: 13, weight: slot.app == nil ? .regular : .medium))
+                .foregroundStyle(slot.app == nil ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(slot.app?.displayName ?? "空位 \(index + 1)")
+            Spacer(minLength: 8)
+            actions
+        }
+        .padding(.vertical, 2)
+        .contentShape(Rectangle())
+    }
+
+    private var appIcon: some View {
+        Group {
+            if let path = slot.app?.path {
+                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+                    .resizable()
+            } else {
+                Image(systemName: "app.dashed")
+                    .resizable()
+                    .foregroundStyle(.tertiary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var actions: some View {
+        if slot.app == nil {
+            Button("添加…") { model.chooseApp(at: index) }
+                .buttonStyle(.borderless)
+                .font(.system(size: 12))
+                .help("为空位选择一个应用")
+        } else {
+            Button {
+                model.chooseApp(at: index)
+            } label: {
+                Image(systemName: "arrow.left.arrow.right")
+            }
+            .buttonStyle(.borderless)
+            .help("替换第 \(index + 1) 位的应用")
+            Button {
+                model.removeApp(at: index)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("移除第 \(index + 1) 位的应用，保留空位")
+        }
+    }
+}
+
+// MARK: - Permission card
+
+private struct InputPermissionCard: View {
+    @ObservedObject var model: SettingsModel
+
+    private var granted: Bool { model.status.access == .granted }
+
+    var body: some View {
+        SettingsCard(padding: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: granted ? "checkmark.shield" : "exclamationmark.shield")
+                        .font(.system(size: 13))
+                        .foregroundStyle(granted ? Color.secondary : Color.orange)
+                    Text("输入监控权限")
+                        .font(.system(size: 13, weight: .semibold))
+                    statusPill
+                    Spacer(minLength: 8)
+                    Button("检查权限") { model.refreshPermission() }
+                        .font(.system(size: 12))
+                        .help("重新读取系统当前的输入监控授权状态")
+                    // Granting is the only route out of "not granted"; once granted the
+                    // card keeps the check and the listener recovery instead.
+                    if !granted {
+                        Button("请求权限") { model.requestPermission() }
+                            .font(.system(size: 12))
+                    }
+                }
+                Text(model.status.detail)
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if model.status.showsOpenSettings || model.status.showsRetryListener {
+                    HStack(spacing: 8) {
+                        if model.status.showsOpenSettings {
+                            Button("打开系统设置（输入监控）") { model.openInputMonitoringSettings() }
+                                .font(.system(size: 12))
+                        }
+                        if model.status.showsRetryListener {
+                            Button("重试监听") { model.retryListener() }
+                                .font(.system(size: 12))
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+                if let message = model.permissionMessage {
+                    Text(message)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Access and listener health in one word, so "already granted but the tap died"
+    /// never reads as "no permission".
+    private var statusPill: some View {
+        let label: String
+        let color: Color
+        switch (model.status.access, model.status.listener) {
+        case (.granted, .running):
+            label = "已开启"
+            color = .secondary
+        case (.granted, _):
+            label = "已开启，监听未运行"
+            color = .orange
+        case (.notGranted, _):
+            label = "未开启"
+            color = .orange
+        }
+        return Text(label)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundStyle(color)
+            .lineLimit(1)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(color.opacity(0.14)))
+            // The longest state ("已开启，监听未运行") must not be squeezed by the buttons.
+            .fixedSize(horizontal: true, vertical: false)
+    }
+}
+
+// MARK: - Footer
+
+private struct SettingsFooterView: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Button {
+                model.revealConfiguration()
+            } label: {
+                Label("打开配置目录", systemImage: "folder")
+            }
+            .buttonStyle(.link)
+            .font(.system(size: 12))
+            .help("在访达中显示 configuration.json")
+            if let error = model.lastError {
+                Text(error)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.red)
+                    .lineLimit(1)
+                    .help(error)
+            }
+            Spacer(minLength: 8)
+            Button("保存") { model.save() }
+                .keyboardShortcut("s", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+        }
+        .frame(minHeight: Layout.footerMinHeight)
+    }
+}
+
+// MARK: - Shared card chrome
+
+/// One card look for both columns and the permission area: a soft system surface with a
+/// hairline edge, so the page reads as layers instead of a single grey sheet.
+private struct SettingsCard<Content: View>: View {
+    var padding: CGFloat = Layout.cardPadding
+    /// Only the card next to the preview stretches; the others stay as tall as they read.
+    var stretchesVertically: Bool = false
+    @ViewBuilder var content: Content
+
+    var body: some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity,
+                   maxHeight: stretchesVertically ? .infinity : nil,
+                   alignment: .topLeading)
+            .background(
+                RoundedRectangle(cornerRadius: Layout.cardCorner, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: Layout.cardCorner, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+            )
+    }
+}
+
+// MARK: - Model
 
 final class SettingsModel: ObservableObject {
     @Published var slots: [Slot]

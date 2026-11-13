@@ -265,6 +265,27 @@ final class LayoutTests: XCTestCase {
                                          visibleFrames: [micro]))
     }
 
+    /// What the user asked for: everything at half the website's size on a normal screen.
+    /// 面板 424→212、外径 344→172、内孔直径 168→84、图标 63.2→31.6、图标圆心半径 128→64。
+    func testNormalScreenDrawsTheRingAtHalfTheWebsiteSize() {
+        let geometry = try! XCTUnwrap(RingLayout.geometry(slotCount: 8,
+                                                          mouse: CGPoint(x: 700, y: 500),
+                                                          screens: [screen],
+                                                          visibleFrames: [visible]))
+        let plate = geometry.plateRect
+        XCTAssertEqual(geometry.panelFrame.width, 212, accuracy: 0.001, "面板应减半")
+        XCTAssertEqual(plate.width, 172, accuracy: 0.001, "环外径应减半")
+        XCTAssertEqual(RingPresentation.innerRadius(plateRect: plate) * 2, 84, accuracy: 0.001,
+                       "内孔直径应减半")
+        XCTAssertEqual(geometry.cancelFrame.width, 84, accuracy: 0.001, "取消区应等于可见内孔")
+        XCTAssertEqual(RingPresentation.iconRect(hitFrame: geometry.iconFrames[0], isHovered: false).width,
+                       31.6, accuracy: 0.001, "图标应减半")
+        let centre = CGPoint(x: plate.midX, y: plate.midY)
+        let distance = ((geometry.iconFrames[0].midX - centre.x) * (geometry.iconFrames[0].midX - centre.x)
+            + (geometry.iconFrames[0].midY - centre.y) * (geometry.iconFrames[0].midY - centre.y)).squareRoot()
+        XCTAssertEqual(distance, 64, accuracy: 0.001, "图标圆心半径应减半")
+    }
+
     func testHitTestDistinguishesSlotCancelEmptyAndOutside() {
         let mouse = CGPoint(x: 700, y: 500)
         let geometry = try! XCTUnwrap(RingLayout.geometry(slotCount: 8,
@@ -355,28 +376,27 @@ final class LayoutTests: XCTestCase {
         let centre = CGPoint(x: geometry.panelFrame.width / 2, y: geometry.panelFrame.height / 2)
         for frame in geometry.iconFrames {
             for isHovered in [false, true] {
-                let tile = RingGlyph.tileRect(hitFrame: frame, centre: centre, isHovered: isHovered)
-                let dx = tile.midX - centre.x
-                let dy = tile.midY - centre.y
-                let reach = (dx * dx + dy * dy).squareRoot() + tile.width / 2
-                XCTAssertLessThanOrEqual(reach, plate.width / 2, "icon tile overhangs the ring")
+                let icon = RingPresentation.iconRect(hitFrame: frame, isHovered: isHovered)
+                let dx = icon.midX - centre.x
+                let dy = icon.midY - centre.y
+                let reach = (dx * dx + dy * dy).squareRoot() + icon.width / 2
+                XCTAssertLessThanOrEqual(reach, plate.width / 2, "图标越过环外轮廓")
             }
         }
     }
 
     /// A hovered icon grows and lifts, but must stay inside its clickable frame: a
     /// visible overhang would be a dead pixel the user expects to click.
-    func testHoveredTileStaysInsideItsHitFrame() {
+    func testHoveredIconStaysInsideItsHitFrame() {
         let geometry = try! XCTUnwrap(RingLayout.geometry(slotCount: 8,
                                                          mouse: CGPoint(x: 700, y: 500),
                                                          screens: [screen],
                                                          visibleFrames: [visible]))
-        let centre = CGPoint(x: geometry.panelFrame.width / 2, y: geometry.panelFrame.height / 2)
         for frame in geometry.iconFrames {
-            let idle = RingGlyph.tileRect(hitFrame: frame, centre: centre, isHovered: false)
-            let hovered = RingGlyph.tileRect(hitFrame: frame, centre: centre, isHovered: true)
-            XCTAssertTrue(frame.contains(idle), "idle tile escaped its hit frame")
-            XCTAssertTrue(frame.contains(hovered), "hovered tile escaped its hit frame")
+            let idle = RingPresentation.iconRect(hitFrame: frame, isHovered: false)
+            let hovered = RingPresentation.iconRect(hitFrame: frame, isHovered: true)
+            XCTAssertTrue(frame.contains(idle), "静态图标超出命中框")
+            XCTAssertTrue(frame.contains(hovered), "悬停图标超出命中框：看得见却点不到")
             XCTAssertGreaterThan(hovered.width, idle.width)
         }
     }
@@ -929,25 +949,45 @@ final class RingPointerTests: XCTestCase {
         }
     }
 
-    /// The rule only matters because icons really do cross sector boundaries: this test
-    /// fails if that ever stops being true, so the icon-first branch cannot rot silently.
-    func testSomeIconCornersCrossTheSectorBoundaryAndTheIconStillWins() {
-        let ring = geometry()
-        let center = RingPointer.ringCenter(of: ring)
-        var crossings = 0
-        for (index, frame) in ring.iconFrames.enumerated() {
-            let inner = frame.insetBy(dx: 0.5, dy: 0.5)
-            let points = [CGPoint(x: inner.minX, y: inner.minY), CGPoint(x: inner.maxX, y: inner.minY),
-                          CGPoint(x: inner.minX, y: inner.maxY), CGPoint(x: inner.maxX, y: inner.maxY)]
-            for local in points {
-                let screenPoint = CGPoint(x: ring.panelFrame.minX + local.x, y: ring.panelFrame.minY + local.y)
-                guard RingPointer.slot(at: screenPoint, center: center, slotCount: 8) != index else { continue }
-                crossings += 1
-                let decision = RingPointer.decide(screenPoint, activeScreenFrame: screen, geometry: ring, filled: allFilled)
-                XCTAssertEqual(decision.action, .launch(index), "跨扇区的图标角必须仍启动该图标")
+    /// With the website's proportions an icon frame stays inside its own sector at every
+    /// slot count, so the angle can never claim a point that lies on an icon. The icon-first
+    /// rule still has to hold where a frame does reach past the boundary, so it is proven
+    /// below on the top frame widened past it.
+    func testIconFramesStayInsideTheirSectorAndStillWinWhenTheyDoNot() {
+        let centre = RingPointer.ringCenter(of: geometry())
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                                          mouse: CGPoint(x: 700, y: 500),
+                                                          screens: [screen],
+                                                          visibleFrames: [visible]))
+            for (index, frame) in ring.iconFrames.enumerated() {
+                let inner = frame.insetBy(dx: 0.5, dy: 0.5)
+                let corners = [CGPoint(x: inner.minX, y: inner.minY), CGPoint(x: inner.maxX, y: inner.minY),
+                               CGPoint(x: inner.minX, y: inner.maxY), CGPoint(x: inner.maxX, y: inner.maxY)]
+                for local in corners {
+                    let screenPoint = CGPoint(x: ring.panelFrame.minX + local.x,
+                                              y: ring.panelFrame.minY + local.y)
+                    XCTAssertEqual(RingPointer.slot(at: screenPoint,
+                                                    center: RingPointer.ringCenter(of: ring),
+                                                    slotCount: count),
+                                   index,
+                                   "N=\(count) 图标 \(index) 的角越过了自己的扇区：\(local)")
+                }
             }
         }
-        XCTAssertGreaterThan(crossings, 0, "图标已不再跨扇区，图标优先分支失去依据")
+
+        var wider = geometry()
+        let top = wider.iconFrames[0]
+        wider.iconFrames[0] = top.insetBy(dx: -top.width * 0.6, dy: -top.height * 0.6)
+        let straddling = CGPoint(x: wider.panelFrame.minX + wider.iconFrames[0].maxX - 1,
+                                 y: wider.panelFrame.minY + wider.iconFrames[0].midY)
+        XCTAssertNotEqual(RingPointer.slot(at: straddling, center: centre, slotCount: 8), 0,
+                          "取点必须先落在图标自己的扇区之外")
+        let decision = RingPointer.decide(straddling,
+                                          activeScreenFrame: screen,
+                                          geometry: wider,
+                                          filled: allFilled)
+        XCTAssertEqual(decision.action, .launch(0), "跨扇区的图标必须仍启动该图标")
     }
 
     /// The verifier's acceptance shape: one decision, then the copy it produces. An
@@ -1508,29 +1548,23 @@ final class HoldToLaunchTests: XCTestCase {
         }
     }
 
-    /// The reported N=7 case: neighbouring square frames overlap in an invisible corner
-    /// region. Under the circular rule that region belongs to nobody and must cancel.
-    func testOverlappingSquareCornersInN7AreBlank() {
-        let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: 7,
-                                                       mouse: CGPoint(x: 700, y: 500),
-                                                       screens: [screen],
-                                                       visibleFrames: [visible]))
-        var overlaps = 0
-        for (index, frame) in ring.iconFrames.enumerated() {
-            let corners = [CGPoint(x: frame.minX, y: frame.minY), CGPoint(x: frame.maxX, y: frame.minY),
-                           CGPoint(x: frame.minX, y: frame.maxY), CGPoint(x: frame.maxX, y: frame.maxY)]
-            for corner in corners {
-                let owners = ring.iconFrames.enumerated().filter { $0.element.contains(corner) }.map(\.offset)
-                guard owners.count > 1 else { continue }
-                overlaps += 1
-                let decision = RingPointer.holdSelection(world(corner, in: ring),
-                                                        geometry: ring,
-                                                        filled: Array(repeating: true, count: 7))
-                XCTAssertNil(decision.slot, "重叠角区（槽 \(owners)）必须空白")
-                XCTAssertEqual(decision.action, .cancel)
+    /// With the website's proportions no two hit frames share a point at any slot count:
+    /// no click can be ambiguous, so the corner rule is a safety net rather than a case the
+    /// user meets. The blank-corner rule itself is checked on the corners inside the ring
+    /// (see `testFrameCornersFollowTheDrawnCircle` above).
+    func testNoTwoHitFramesOverlapAtAnyCount() {
+        for count in LauncherConfiguration.visibleSlotRange {
+            let ring = try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                                          mouse: CGPoint(x: 700, y: 500),
+                                                          screens: [screen],
+                                                          visibleFrames: [visible]))
+            for first in 0..<ring.iconFrames.count {
+                for second in (first + 1)..<ring.iconFrames.count {
+                    XCTAssertFalse(ring.iconFrames[first].intersects(ring.iconFrames[second]),
+                                   "N=\(count) 槽 \(first) 与 \(second) 的命中框重叠")
+                }
             }
         }
-        XCTAssertGreaterThan(overlaps, 0, "若 N=7 已无方框重叠，本用例失去对象")
     }
 
     /// Inside the ring but not on an icon: nothing is selected, so a release cancels.
@@ -1759,6 +1793,234 @@ final class RingPointerRoutingTests: XCTestCase {
                 XCTAssertFalse(RingPointerRouting.acceptsMove(from: source, mode: mode, ringVisible: false),
                                "\(source)/\(mode) 在环隐藏时不得更新高亮")
             }
+        }
+    }
+}
+
+
+/// The ring's look: a complete band with a see-through hole and icons that fit inside it.
+/// These are appearance rules, checked on the mask path and the geometry the panel really
+/// uses — not on drawing code. There is no launch animation to schedule.
+final class RingPresentationTests: XCTestCase {
+    private func point(centre: CGPoint, degrees: Double, radius: CGFloat) -> CGPoint {
+        let radians = degrees * .pi / 180
+        return CGPoint(x: centre.x + radius * cos(radians), y: centre.y + radius * sin(radians))
+    }
+
+    private func maskBand(centre: CGPoint, radius: CGFloat, lineWidth: CGFloat) -> CGPath {
+        RingPresentation.maskPath(centre: centre, radius: radius)
+            .copy(strokingWithWidth: lineWidth, lineCap: .butt, lineJoin: .miter, miterLimit: 10)
+    }
+
+    /// The mask is a closed band, not a thin circle: every angle, both edges, and nothing
+    /// inside the hole or outside the ring.
+    func testMaskRevealsTheWholeBand() {
+        let centre = CGPoint(x: 100, y: 100)
+        let full = maskBand(centre: centre, radius: 50, lineWidth: 20)
+        for degrees in stride(from: 0.0, to: 360.0, by: 15.0) {
+            XCTAssertTrue(full.contains(point(centre: centre, degrees: degrees, radius: 41)),
+                          "环内边缘角 \(degrees) 处应显现")
+            XCTAssertTrue(full.contains(point(centre: centre, degrees: degrees, radius: 59)),
+                          "环外边缘角 \(degrees) 处应显现")
+        }
+        XCTAssertFalse(full.contains(centre), "中央必须真正镂空")
+        XCTAssertFalse(full.contains(point(centre: centre, degrees: 45, radius: 30)), "内孔不得有材质")
+        XCTAssertFalse(full.contains(point(centre: centre, degrees: 45, radius: 65)), "环外必须透明")
+    }
+
+    /// The hole is the website's ratio, and it must clear the icons: a hole that eats one
+    /// icon would hide the app the user is aiming at.
+    func testHoleKeepsItsRatioAndClearsEveryIcon() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let visible = CGRect(x: 0, y: 0, width: 1512, height: 950)
+        for count in LauncherConfiguration.visibleSlotRange {
+            guard let geometry = RingLayout.geometry(slotCount: count,
+                                                     mouse: CGPoint(x: 700, y: 500),
+                                                     screens: [screen],
+                                                     visibleFrames: [visible]) else {
+                XCTFail("\(count) 槽无法布局")
+                continue
+            }
+            let plate = geometry.plateRect
+            let centre = CGPoint(x: plate.midX, y: plate.midY)
+            let outer = plate.width / 2
+            let inner = RingPresentation.innerRadius(plateRect: plate)
+            XCTAssertEqual(inner / outer, 84.0 / 172.0, accuracy: 0.001,
+                           "\(count) 槽内孔比例与官网 r=84/r=172 不一致")
+            let band = (outer - inner) / plate.width
+            XCTAssertEqual(band, 88.0 / 344.0, accuracy: 0.001,
+                           "\(count) 槽环宽与官网 88/344 不一致")
+            // The mask really covers this ring: a point on each icon's radius is inside it,
+            // and a point just outside the plate is not.
+            let covered = maskBand(centre: centre,
+                                   radius: RingPresentation.maskRadius(plateRect: plate),
+                                   lineWidth: RingPresentation.maskLineWidth(plateRect: plate))
+            for frame in geometry.iconFrames {
+                let dx = frame.midX - centre.x
+                let dy = frame.midY - centre.y
+                let distance = (dx * dx + dy * dy).squareRoot()
+                XCTAssertGreaterThan(distance - frame.width / 2, inner, "\(count) 槽图标压到内孔")
+                XCTAssertTrue(covered.contains(CGPoint(x: frame.midX, y: frame.midY)),
+                              "\(count) 槽图标所在环面未被遮罩显现")
+            }
+            let outside = CGPoint(x: centre.x + outer + 3, y: centre.y)
+            XCTAssertFalse(covered.contains(outside), "\(count) 槽环外出现了材质")
+            XCTAssertFalse(covered.contains(centre), "\(count) 槽中央没有镂空")
+        }
+    }
+
+    /// The website's proportions, read off its 400 × 400 SVG, as the geometry really
+    /// produces them: plate 172, hole 84, icon circle 128, icon 63.2 (15.8%), and icons that
+    /// neither collide nor leave the band at any slot count.
+    func testGeometryFollowsTheWebsiteRatios() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let visible = CGRect(x: 0, y: 0, width: 1512, height: 950)
+        for count in LauncherConfiguration.visibleSlotRange {
+            guard let geometry = RingLayout.geometry(slotCount: count,
+                                                     mouse: CGPoint(x: 700, y: 500),
+                                                     screens: [screen],
+                                                     visibleFrames: [visible]) else {
+                XCTFail("\(count) 槽无法布局")
+                continue
+            }
+            let plate = geometry.plateRect
+            // One canvas unit, from the plate the drawing and the hit frames both use.
+            let unit = plate.width / (RingPresentation.outerRadius * 2)
+            XCTAssertEqual(unit, RingPresentation.defaultScale, accuracy: 0.0001,
+                           "1512×950 屏应给出设计尺寸（官网比例 × defaultScale）")
+            let centre = CGPoint(x: plate.midX, y: plate.midY)
+            XCTAssertEqual(RingPresentation.innerRadius(plateRect: plate),
+                           RingPresentation.holeRadius * unit,
+                           accuracy: 0.001)
+            var drawn: [CGRect] = []
+            for (index, frame) in geometry.iconFrames.enumerated() {
+                let icon = RingPresentation.iconRect(hitFrame: frame, isHovered: false)
+                XCTAssertEqual(icon.width, RingPresentation.iconSize * unit, accuracy: 0.001,
+                               "N=\(count) 图标应为画布 15.8%")
+                let distance = ((frame.midX - centre.x) * (frame.midX - centre.x)
+                    + (frame.midY - centre.y) * (frame.midY - centre.y)).squareRoot()
+                XCTAssertEqual(distance, RingPresentation.iconRadius * unit, accuracy: 0.001,
+                               "N=\(count) 图标中心应在半径 32% 的圆上")
+                XCTAssertGreaterThan(distance - icon.width / 2,
+                                     RingPresentation.holeRadius * unit,
+                                     "N=\(count) 图标 \(index) 压到内孔")
+                XCTAssertLessThan(distance + icon.width / 2,
+                                  RingPresentation.outerRadius * unit,
+                                  "N=\(count) 图标 \(index) 越过环外缘")
+                XCTAssertTrue(frame.contains(RingPresentation.iconRect(hitFrame: frame, isHovered: true)),
+                              "N=\(count) 悬停放大后的图标超出命中框")
+                let slotPoint = CGPoint(x: geometry.panelFrame.minX + frame.midX,
+                                        y: geometry.panelFrame.minY + frame.midY)
+                XCTAssertEqual(RingLayout.hitTest(geometry, screenPoint: slotPoint), .slot(index),
+                               "N=\(count) 命中与绘制不一致")
+                drawn.append(icon)
+            }
+            let middle = CGPoint(x: geometry.panelFrame.minX + centre.x,
+                                 y: geometry.panelFrame.minY + centre.y)
+            XCTAssertEqual(RingLayout.hitTest(geometry, screenPoint: middle), .cancel,
+                           "N=\(count) 中央必须是取消区")
+            for first in 0..<drawn.count {
+                for second in (first + 1)..<drawn.count {
+                    XCTAssertFalse(drawn[first].intersects(drawn[second]),
+                                   "N=\(count) 图标 \(first) 与 \(second) 相互碰撞")
+                }
+            }
+        }
+    }
+
+    /// Hover feedback stays a small growth, and it stays inside the clickable frame.
+    func testHoverGrowsTheIconInsideTheAllowedRange() {
+        let frame = CGRect(x: 10, y: 10, width: 52, height: 52)
+        let idle = RingPresentation.iconRect(hitFrame: frame, isHovered: false)
+        let hovered = RingPresentation.iconRect(hitFrame: frame, isHovered: true)
+        let growth = hovered.width / idle.width
+        XCTAssertGreaterThanOrEqual(growth, 1.05)
+        XCTAssertLessThanOrEqual(growth, 1.10)
+        XCTAssertEqual(hovered.midX, idle.midX, accuracy: 1e-9)
+        XCTAssertEqual(hovered.midY, idle.midY, accuracy: 1e-9)
+        XCTAssertTrue(frame.contains(hovered))
+    }
+
+    /// Whatever a slot can paint has to stay inside its clickable frame: the hovered app icon
+    /// (63.2 × 1.08) and the empty slot's plus well (70.4, wider than an icon on the website)
+    /// both fit the 72.23 hit frame. Growing the empty well broke this, so a click on a
+    /// painted edge would have hit nothing.
+    func testNothingASlotPaintsEscapesItsHitFrame() {
+        let hit = RingPresentation.hitSide(drawnIcon: RingPresentation.iconSize)
+        let frame = CGRect(x: 0, y: 0, width: hit, height: hit)
+        let hovered = RingPresentation.iconRect(hitFrame: frame, isHovered: true)
+        XCTAssertGreaterThan(hovered.width, RingPresentation.iconSize, "悬停必须真的放大")
+        XCTAssertLessThanOrEqual(hovered.width, hit, "悬停图标越出命中框")
+        XCTAssertLessThanOrEqual(RingPresentation.emptyWellDiameter, hit, "空槽加号井越出命中框")
+    }
+}
+
+
+/// The settings window must open inside the screen it is on and stay draggable there. The
+/// rule is separate from AppKit so it can be checked with the sizes real screens report.
+final class SettingsWindowGeometryTests: XCTestCase {
+    private let laptop = CGRect(x: 0, y: 0, width: 1792, height: 1090)
+
+    func testRoomyScreenGetsTheDesignedDefaultAndMinimum() {
+        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop), CGSize(width: 960, height: 640))
+        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop), CGSize(width: 720, height: 520))
+    }
+
+    /// A short screen cannot hold 640 pt of content plus a title bar: the window must give
+    /// way, not hang off the display.
+    func testShortScreenShrinksTheDefaultAndTheMinimum() {
+        let short = CGRect(x: 0, y: 0, width: 1024, height: 600)
+        let content = SettingsWindowGeometry.contentSize(fitting: short)
+        let minimum = SettingsWindowGeometry.minimumSize(fitting: short)
+        XCTAssertEqual(content, CGSize(width: 944, height: 520))
+        XCTAssertEqual(minimum, CGSize(width: 720, height: 520))
+        XCTAssertLessThanOrEqual(content.height, minimum.height == 0 ? 0 : short.height - 2 * SettingsWindowGeometry.screenInset)
+        XCTAssertLessThanOrEqual(minimum.width, content.width)
+        XCTAssertLessThanOrEqual(minimum.height, content.height)
+    }
+
+    func testTinyScreenNeverAsksForMoreThanItHas() {
+        let tiny = CGRect(x: 0, y: 0, width: 800, height: 500)
+        let content = SettingsWindowGeometry.contentSize(fitting: tiny)
+        let minimum = SettingsWindowGeometry.minimumSize(fitting: tiny)
+        XCTAssertEqual(content, CGSize(width: 720, height: 420))
+        XCTAssertEqual(minimum, CGSize(width: 720, height: 420))
+        XCTAssertLessThanOrEqual(minimum.height, content.height)
+    }
+
+    /// The window is centred when it fits, and pulled inside when the system centred it
+    /// off the top of the screen.
+    func testOriginCentresAndPullsTheWindowInsideTheScreen() {
+        let window = CGRect(x: 0, y: 0, width: 960, height: 672)
+        let centred = SettingsWindowGeometry.centeredOrigin(windowFrame: window, fitting: laptop)
+        XCTAssertEqual(centred, CGPoint(x: 416, y: 209))
+
+        // A window taller than the screen cannot fit; it sits at the bottom edge instead
+        // of hanging off the top where the title bar would be unreachable.
+        let tallerThanTheScreen = CGRect(x: 416, y: 700, width: 960, height: 1200)
+        let pulled = SettingsWindowGeometry.centeredOrigin(windowFrame: tallerThanTheScreen, fitting: laptop)
+        XCTAssertEqual(pulled.y, 0)
+
+        let widerThanTheScreen = CGRect(x: -300, y: 0, width: 2000, height: 672)
+        XCTAssertEqual(SettingsWindowGeometry.centeredOrigin(windowFrame: widerThanTheScreen, fitting: laptop).x, 0)
+    }
+
+    /// Every size the rule hands out keeps a full window (content plus title bar) inside
+    /// the visible area for the screens this app meets.
+    func testEveryScreenKeepsTheWholeWindowInside() {
+        let titleBar: CGFloat = 32
+        for visible in [laptop,
+                        CGRect(x: 0, y: 0, width: 1280, height: 720),
+                        CGRect(x: 0, y: 0, width: 1024, height: 600),
+                        CGRect(x: 0, y: 0, width: 800, height: 500)] {
+            let content = SettingsWindowGeometry.contentSize(fitting: visible)
+            let frame = CGRect(x: 0, y: 0, width: content.width, height: content.height + titleBar)
+            let origin = SettingsWindowGeometry.centeredOrigin(windowFrame: frame.offsetBy(dx: 0, dy: 500), fitting: visible)
+            let placed = CGRect(origin: origin, size: frame.size)
+            XCTAssertLessThanOrEqual(placed.maxY, visible.maxY, "\(visible) 顶部越界")
+            XCTAssertGreaterThanOrEqual(placed.minY, visible.minY, "\(visible) 底部越界")
+            XCTAssertLessThanOrEqual(placed.maxX, visible.maxX, "\(visible) 右侧越界")
+            XCTAssertGreaterThanOrEqual(placed.minX, visible.minX, "\(visible) 左侧越界")
         }
     }
 }

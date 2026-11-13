@@ -20,7 +20,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// stays until then so that release cannot reach the app behind it.
     private var keepingOverlayForRelease = false
     private let panelContainer = NSView()
-    private let panelBlur = NSVisualEffectView()
+    private let materialView = RingMaterialView(frame: .zero)
     private var ringView: RingView?
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
@@ -193,41 +193,36 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func presentPanel(geometry: RingGeometry) {
-        let view = ringView ?? RingView()
-        view.geometry = geometry
-        view.items = session.slots.map { slot in
+        let view = ringView ?? RingView(frame: .zero)
+        let items = session.slots.map { slot in
             RingView.Item(name: slot.app?.displayName ?? "",
                           icon: slot.app.map { NSWorkspace.shared.icon(forFile: $0.path) },
                           isFilled: slot.app != nil)
         }
-        view.decision = nil
-        view.mode = inputMode
         ringView = view
 
         panel.setFrame(geometry.panelFrame, display: true)
         if panel.contentView !== panelContainer {
-            // A real frosted plate instead of a flat fill: the light material sits
-            // behind the ring so the ring reads as lightweight over any wallpaper.
-            panelBlur.material = .popover
-            panelBlur.blendingMode = .behindWindow
-            panelBlur.state = .active
-            panelBlur.wantsLayer = true
-            panelBlur.layer?.masksToBounds = true
-            panelBlur.appearance = NSAppearance(named: .aqua)
-            panelContainer.addSubview(panelBlur)
+            // The material is its own view: the website's band and its hairlines, all
+            // clipped to a ring so the middle and the outside are genuinely clear.
+            panelContainer.addSubview(materialView)
             view.autoresizingMask = [.width, .height]
             panelContainer.addSubview(view)
             panel.contentView = panelContainer
         }
         panelContainer.frame = NSRect(origin: .zero, size: geometry.panelFrame.size)
-        // A corner radius of half the side makes the circle; the tint and edge the view
-        // draws use the same rect from the geometry.
-        let plate = geometry.plateRect
-        panelBlur.frame = plate
-        panelBlur.layer?.cornerRadius = plate.width / 2
+        materialView.frame = panelContainer.bounds
         view.frame = panelContainer.bounds
+        // The ring is complete before the window is ordered front: this one entry point
+        // serves the Option gesture, the menu item, a quick reopen and Reduce Motion
+        // alike. There is no launch animation left to enable or skip.
+        materialView.selectedSlot = nil
+        materialView.prepare(geometry: geometry)
+        view.present(geometry: geometry,
+                     items: items,
+                     mode: inputMode,
+                     decision: nil)
         panel.orderFrontRegardless()
-        view.needsDisplay = true
     }
 
     // MARK: - Screen-wide selection
@@ -256,7 +251,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private func pointerMoved(to point: CGPoint, from source: RingPointerSource) {
         guard RingPointerRouting.acceptsMove(from: source, mode: inputMode, ringVisible: session.isVisible),
               let decision = currentDecision(at: point) else { return }
+        show(decision: decision)
+    }
+
+    /// The highlight lives in two views: the icon that grows and the wash on the band. One
+    /// call moves both, so they can never point at different slots.
+    private func show(decision: RingPointerDecision?) {
         ringView?.decision = decision
+        materialView.selectedSlot = decision?.slot
     }
 
     /// The release decides from where the release happened. An unknown position can only
@@ -287,7 +289,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         session.cancel()
         monitor.forwardsPointerMoves = false
         panel.orderOut(nil)
-        ringView?.decision = nil
+        show(decision: nil)
         activeScreenFrame = nil
         recognizer.reset()
     }
@@ -347,7 +349,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func clearHighlight() {
-        ringView?.decision = nil
+        show(decision: nil)
     }
 
     /// Leaving the overlay matters only for the menu entry, which is limited to this screen.
@@ -385,7 +387,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private func hidePanel() {
         panel.orderOut(nil)
         overlay.orderOut(nil)
-        ringView?.decision = nil
+        show(decision: nil)
         activeScreenFrame = nil
         keepingOverlayForRelease = false
         // Global pointer tracking exists only to follow the gesture across displays.
@@ -444,19 +446,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
         statusItem?.button?.toolTip = status.headline
         settingsModel?.apply(status: status)
-        fitSettingsWindow()
-    }
-
-    /// The permission text can be longer after the window exists (a result message adds
-    /// up to ~64pt), so the window is grown to the content instead of trusting the height
-    /// it was created with.
-    private func fitSettingsWindow() {
-        guard let window = settingsWindow,
-              let content = window.contentViewController?.view else { return }
-        content.layoutSubtreeIfNeeded()
-        let needed = content.fittingSize
-        guard needed.height > window.contentLayoutRect.height + 0.5 else { return }
-        window.setContentSize(needed)
     }
 
     @objc private func manualShow() {
@@ -481,7 +470,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             installMonitor()
         }
         settingsModel?.report(retryResult: currentStatus, listenerWasRunning: wasRunning)
-        fitSettingsWindow()
     }
 
     /// Explicit user action. Always produces a visible answer: granted, still missing,
@@ -502,7 +490,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             openSettings()
         }
         settingsModel?.report(requestResult: currentStatus, accessAfterRequest: access)
-        fitSettingsWindow()
     }
 
     private var settingsWindowVisible: Bool {
@@ -539,9 +526,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 // A visible ring was drawn for the old count: close it instead of pairing
                 // that geometry with the new slot list. The next open uses the new value.
                 if countChanged { self.cancelRing() }
-                // A different count changes the sheet's height (three rows vs eight). Grow the
-                // window here as well; the helper only ever grows, so this is a no-op otherwise.
-                self.fitSettingsWindow()
             }
             model.onRefreshPermission = { [weak self] in
                 guard let self else { return }
@@ -551,15 +535,27 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             model.onRetryListener = { [weak self] in self?.retryListener() }
             model.onOpenInputMonitoringSettings = { [weak self] in self?.openInputMonitoringSettings() }
             settingsModel = model
+            // The page declares its own floor (SettingsWindowGeometry.minimumSize, capped
+            // by the screen), so the hosting controller's minimum is a size the user can
+            // still reach. Before that the page reported 1185 pt of minimum
+            // height on a 1090 pt screen, and the window opened past the display and
+            // could not be dragged back.
             let hosting = NSHostingController(rootView: SettingsView(model: model))
-            hosting.view.layoutSubtreeIfNeeded()
             let window = NSWindow(contentViewController: hosting)
+            // The native title bar carries the name: the page itself must not repeat it.
             window.title = "Ring 设置"
-            window.styleMask = [.titled, .closable]
+            // Resizable because the slot list and the permission text both change length;
+            // the page scrolls its list instead of growing the window on every message.
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false
-            window.contentView?.layoutSubtreeIfNeeded()
-            window.setContentSize(hosting.view.fittingSize)
-            window.center()
+            // A window the screen under it can hold, and a minimum that still fits there.
+            // Reopening reuses this window, so the size the user dragged is kept.
+            let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
+                ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
+            window.setContentSize(SettingsWindowGeometry.contentSize(fitting: visible))
+            window.contentMinSize = SettingsWindowGeometry.minimumSize(fitting: visible)
+            window.setFrameOrigin(SettingsWindowGeometry.centeredOrigin(windowFrame: window.frame,
+                                                                       fitting: visible))
             settingsWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
