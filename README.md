@@ -2,7 +2,7 @@
 
 在 macOS 上连按同一侧 Option 键两次，按住第二次，鼠标位置会弹出一个圆环。移动鼠标选方向，松开就启动那个位置上的应用。
 
-免费使用，代码公开。
+免费使用，开源，采用 MIT 许可。
 
 ![Ring 的圆环启动器](https://github.com/1993yihuan/Ring/releases/download/v0.1.3/preview.png)
 
@@ -21,7 +21,7 @@
 
 ## 下载与安装
 
-安装包在 [GitHub Releases](https://github.com/1993yihuan/Ring/releases) 上免费下载，源码公开在同一个仓库。仓库目前没有附许可证文件，所以还没有明确的许可条款。
+安装包在 [GitHub Releases](https://github.com/1993yihuan/Ring/releases) 上免费下载，源码公开在同一个仓库，代码采用 [MIT 许可](LICENSE)。
 
 ### 选对安装包
 
@@ -35,17 +35,17 @@
 ### 安装
 
 1. 双击下载的 DMG，打开磁盘映像。卷里就是 Ring.app。
-2. 在个人文件夹里新建两个文件夹：一个叫 `Ring`，里面再建一个叫 `App`。把 Ring.app 放到 `App` 里。最终路径形如 `/Users/你的用户名/Ring/App/Ring.app`。
+2. 把 Ring.app 拖到「应用程序」里。放桌面、下载或别的位置也可以。
 3. 在访达边栏推出这个磁盘映像。
 4. 第一次打开时，系统可能提示无法验证开发者。任选一种方式放行：
    - 打开「系统设置 → 隐私与安全性」，在下方点「仍要打开」，再确认一次。
    - 在访达里右键 Ring.app（或按住 Control 点按），选「打开」，然后在对话框里确认。
 
-第 2 步的目录结构不是必须的，但推荐照做。当前版本把设置写在 Ring.app 所在文件夹的上一级 data 目录，按上面的放法就是 `/Users/你的用户名/Ring/data`，只放 Ring 自己的配置。直接把 Ring.app 丢在「桌面」或「下载」里，配置会写到 `/Users/你的用户名/data`，和其他软件共用同一个 data 目录；放进「应用程序」则写不进去。
+Ring 的槽位配置存在个人文件夹的 `Library/Application Support/Ring` 里，和 Ring.app 放在哪无关，移动或重新安装 App 都不会丢配置。只有从源码构建的 Demo 例外，它把数据留在自己的工程目录里。
 
 ### 第一次运行
 
-1. 双击 `/Users/你的用户名/Ring/App/Ring.app`。菜单栏出现一个虚线圆图标，Ring 没有 Dock 图标，退出也在菜单栏里。
+1. 打开「应用程序」，双击 Ring。菜单栏出现一个虚线圆图标，Ring 没有 Dock 图标，退出也在菜单栏里。
 2. 菜单栏 → 请求输入监控权限。
 3. 打开「系统设置 → 隐私与安全性 → 输入监控」，勾选 Ring。系统要求重新打开时，从菜单栏退出 Ring 再打开一次。
 4. 再看菜单栏里的第一项。监听正常时它写「手动打开环形（布局验证）」，监听没起来时写「手动打开环形（监听不可用）」，可以点「重试全局监听」重试。
@@ -85,15 +85,15 @@
 
 **环心有时没有名字。** 名字只在选中某个位置时显示。指向空位显示「空位」，什么都不显示说明没有选中任何位置。
 
-**添加应用时提示保存失败。** 当前版本把设置写在 Ring.app 所在文件夹的上一级 data 目录。装进「应用程序」时这个上一级是系统盘根目录，macOS 不允许写入，所以保存会失败。按安装一节的目录结构把 Ring.app 放到 `/Users/你的用户名/Ring/App/` 下就能保存。
+**配置存在哪里。** 文件是 `~/Library/Application Support/Ring/configuration.json`。设置窗口底部的「打开配置目录」可以直接在访达打开这个文件夹。
 
-**怎么退出和卸载。** 想清掉配置的话，先在设置窗口点「打开配置目录」，记下它打开的那个文件夹。然后菜单栏 → 退出 Ring，把 Ring.app 拖到废纸篓，再回到那个文件夹，只删其中的 `configuration.json`，其他文件不要动。
+**怎么退出和卸载。** 菜单栏 → 退出 Ring。把 Ring.app 拖到废纸篓。想清掉配置时，再删除 `~/Library/Application Support/Ring` 文件夹，那里只有 Ring 自己的设置。
 
 ## 已知限制
 
 - 签名是 ad-hoc，没有 Developer ID，也没有公证。第一次打开需要自己放行。
 - 安装包按架构分别打包。Apple Silicon 包在打包后核对了可执行文件的架构，但没有在 M 系列机器上实际运行过。
-- 设置写在 Ring.app 所在文件夹的上一级 data 目录，放进「应用程序」时不可写，见上面的常见问题。
+- 0.1.3 及更早的安装包把配置写在 Ring.app 所在文件夹的上一级 data 目录。新版只读 `~/Library/Application Support/Ring`，不会自动搬动旧文件。
 - 多显示器、缩放、睡眠唤醒等场景还没有逐项实测。
 
 ## 相关链接
@@ -101,3 +101,4 @@
 - 官网：https://1993yihuan.github.io/Ring/
 - 源码：https://github.com/1993yihuan/Ring
 - 全部版本：https://github.com/1993yihuan/Ring/releases
+- 许可证：[MIT](LICENSE)；第三方资源的归属见 [THIRD_PARTY.md](THIRD_PARTY.md)

@@ -27,9 +27,6 @@ public struct RingCenterText: Sendable, Equatable {
         self.title = title
         self.action = action
     }
-
-    /// Always shown: the centre is also the cancel target.
-    public static let escapeHint = "Esc 取消"
 }
 
 public enum RingCenter {
@@ -55,18 +52,6 @@ public enum RingCenter {
                     launches: decision.launches)
     }
 
-    /// Copy for "no decision yet": the ring has just appeared, or the highlight was
-    /// cleared, so nothing is selected. The gesture entry still promises what a release
-    /// does; the angular entry stays quiet until the pointer means something.
-    public static func restingText(mode: RingInputMode) -> RingCenterText {
-        switch mode {
-        case .holdToLaunch:
-            return RingCenterText(title: nil, action: "松开取消")
-        case .angularClick:
-            return RingCenterText(title: nil, action: nil)
-        }
-    }
-
     /// Mode-aware copy: the gesture entry has no click, so it must not promise one.
     public static func text(for decision: RingPointerDecision,
                             names: [String],
@@ -79,10 +64,10 @@ public enum RingCenter {
             guard let slot = decision.slot,
                   names.indices.contains(slot),
                   filled.indices.contains(slot) else {
-                // Nothing is selected: releasing only closes the ring.
-                return RingCenterText(title: nil, action: "松开取消")
+                // Nothing is selected: the centre stays quiet.
+                return RingCenterText(title: nil, action: nil)
             }
-            if !filled[slot] { return RingCenterText(title: "空位", action: "松开取消") }
+            if !filled[slot] { return RingCenterText(title: "空位", action: nil) }
             let name = names[slot]
             return RingCenterText(title: name.isEmpty ? nil : name, action: "松开启动")
         }

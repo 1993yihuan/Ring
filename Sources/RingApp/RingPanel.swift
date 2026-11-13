@@ -1,4 +1,5 @@
 import AppKit
+import CoreText
 import RingCore
 
 /// Non-activating panel: showing it never takes focus from the app the user is in. The
@@ -30,10 +31,8 @@ final class RingPanel: NSPanel {
 private enum RingPalette {
     static let label = NSColor(srgbRed: 0x4A / 255, green: 0x47 / 255, blue: 0x44 / 255, alpha: 1)
     static let action = NSColor(srgbRed: 0x6E / 255, green: 0x68 / 255, blue: 0x62 / 255, alpha: 1)
-    static let hint = NSColor(srgbRed: 0x8C / 255, green: 0x86 / 255, blue: 0x7F / 255, alpha: 1)
     static let labelDark = NSColor.white.withAlphaComponent(0.94)
     static let actionDark = NSColor.white.withAlphaComponent(0.66)
-    static let hintDark = NSColor.white.withAlphaComponent(0.52)
     static let emptyWell = NSColor(srgbRed: 0xE7 / 255, green: 0xE2 / 255, blue: 0xDA / 255, alpha: 1)
     static let emptyWellEdge = NSColor(srgbRed: 0xBD / 255, green: 0xB7 / 255, blue: 0xAE / 255, alpha: 1)
     static let emptyWellPlus = NSColor(srgbRed: 0x8A / 255, green: 0x85 / 255, blue: 0x80 / 255, alpha: 1)
@@ -180,47 +179,64 @@ final class RingView: NSView {
         drawCentre(geometry: geometry)
     }
 
-    /// The centre is the cancel target, so it always says that; a hovered slot replaces
-    /// the empty state with its real name and what the release or click does. No plate
-    /// behind it: the hole stays see-through.
+    /// The hovered name sits on the exact middle of the hole and nothing moves it there;
+    /// the verb hangs below it. No plate behind them: the hole stays see-through.
     private func drawCentre(geometry: RingGeometry) {
+        guard let decision else { return }
         let centre = CGPoint(x: bounds.midX, y: bounds.midY)
         let unit = RingPresentation.unit(plateRect: geometry.plateRect)
-        let text = decision.map {
-            RingCenter.text(for: $0,
-                            names: items.map(\.name),
-                            filled: items.map(\.isFilled),
-                            mode: mode)
-        } ?? RingCenter.restingText(mode: mode)
+        let text = RingCenter.text(for: decision,
+                                   names: items.map(\.name),
+                                   filled: items.map(\.isFilled),
+                                   mode: mode)
         let width = max(2 * RingPresentation.holeRadius * unit - 8 * unit, 60 * unit)
+        var inkBottom = centre.y
         if let title = text.title {
+            let font = titleFont(fitting: title, width: width, unit: unit)
+            let ink = inkBounds(title, font: font)
             drawCentred(title,
-                        font: titleFont(fitting: title, width: width, unit: unit),
+                        font: font,
                         color: isDark ? RingPalette.labelDark : RingPalette.label,
-                        in: NSRect(x: centre.x - width / 2,
-                                   y: centre.y + 3 * unit,
-                                   width: width,
-                                   height: 21 * unit),
+                        in: lineRect(ink: ink, font: font,
+                                     inkCentreY: centre.y,
+                                     centreX: centre.x, width: width),
                         unit: unit)
+            inkBottom = centre.y - ink.height / 2
         }
         if let action = text.action {
+            let font = NSFont.systemFont(ofSize: 11.5 * unit, weight: .regular)
+            let ink = inkBounds(action, font: font)
             drawCentred(action,
-                        font: .systemFont(ofSize: 11.5 * unit, weight: .regular),
+                        font: font,
                         color: isDark ? RingPalette.actionDark : RingPalette.action,
-                        in: NSRect(x: centre.x - width / 2,
-                                   y: centre.y - 18 * unit,
-                                   width: width,
-                                   height: 16 * unit),
+                        in: lineRect(ink: ink, font: font,
+                                     inkCentreY: inkBottom - 2 * unit - ink.height / 2,
+                                     centreX: centre.x, width: width),
                         unit: unit)
         }
-        drawCentred(RingCenterText.escapeHint,
-                    font: .systemFont(ofSize: 10 * unit, weight: .regular),
-                    color: isDark ? RingPalette.hintDark : RingPalette.hint,
-                    in: NSRect(x: centre.x - width / 2,
-                               y: centre.y - 36 * unit,
-                               width: width,
-                               height: 15 * unit),
-                    unit: unit)
+    }
+
+    /// Glyph ink of one line, relative to its baseline. Only the ink says where the type
+    /// really sits, and the ink is what has to land on the hole's middle.
+    private func inkBounds(_ text: String, font: NSFont) -> CGRect {
+        let attributed = NSAttributedString(string: text, attributes: [.font: font])
+        return CTLineGetBoundsWithOptions(CTLineCreateWithAttributedString(attributed), .useGlyphPathBounds)
+    }
+
+    /// The rect that draws `ink` centred on `inkCentreY`. `NSString.draw(in:)` puts the
+    /// line box's top at the rect's top, so a rect centred on the middle still draws its
+    /// glyphs high by half the box's spare height; the rect is derived from the ink instead.
+    private func lineRect(ink: CGRect,
+                          font: NSFont,
+                          inkCentreY: CGFloat,
+                          centreX: CGFloat,
+                          width: CGFloat) -> NSRect {
+        let baseline = inkCentreY - ink.midY
+        // The drawn first baseline sits one ascent below the rect's top.
+        return NSRect(x: centreX - width / 2,
+                      y: baseline + font.descender,
+                      width: width,
+                      height: font.ascender - font.descender)
     }
 
     private var isDark: Bool {

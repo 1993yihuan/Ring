@@ -33,7 +33,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
 
         let executable = URL(fileURLWithPath: Bundle.main.executablePath ?? CommandLine.arguments[0])
-        let dataDirectory = ProjectPaths.dataDirectory(forExecutable: executable)
+        // Support folder lookup is the only system query here: the choice between project
+        // data/ and the user's folder lives in ProjectPaths, not at each call site.
+        let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory,
+                                                        in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let dataDirectory = ProjectPaths.dataDirectory(forExecutable: executable,
+                                                       supportDirectory: supportDirectory)
         let store = SlotStore(directory: dataDirectory)
         self.store = store
 

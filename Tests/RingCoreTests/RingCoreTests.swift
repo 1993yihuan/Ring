@@ -432,7 +432,23 @@ final class RingCenterTests: XCTestCase {
         let idle = RingCenter.text(for: .none, launches: false)
         XCTAssertNil(idle.title)
         XCTAssertNil(idle.action)
-        XCTAssertEqual(RingCenterText.escapeHint, "Esc 取消")
+    }
+
+    /// The user removed both cancel hints from the middle of the ring: no decision, in
+    /// either entry, puts "松开取消" or "Esc 取消" there again.
+    func testCentreNeverShowsACancelHint() {
+        let decisions = [
+            RingCenter.text(for: .none, launches: false),
+            RingCenter.text(for: .emptySlot, launches: false),
+            RingCenter.text(for: .app("微信"), launches: true),
+            RingCenter.text(for: .app("微信"), launches: false)
+        ]
+        for copy in decisions {
+            XCTAssertNotEqual(copy.title, "松开取消")
+            XCTAssertNotEqual(copy.action, "松开取消")
+            XCTAssertNotEqual(copy.title, "Esc 取消")
+            XCTAssertNotEqual(copy.action, "Esc 取消")
+        }
     }
 
     /// The name follows the hover direction, the verb follows what the click really does:
@@ -1221,18 +1237,99 @@ final class MousePressBetweenTapsTests: XCTestCase {
 }
 
 final class ProjectPathsTests: XCTestCase {
-    func testBuildLayoutResolvesProjectRoot() {
-        let executable = URL(fileURLWithPath: "/Users/example/Desktop/Ring/build/Ring.app/Contents/MacOS/Ring")
-        let root = ProjectPaths.projectRoot(forExecutable: executable)
-        XCTAssertEqual(root.path, "/Users/example/Desktop/Ring")
-        XCTAssertEqual(ProjectPaths.dataDirectory(forExecutable: executable).path,
-                       "/Users/example/Desktop/Ring/data")
+    /// 注入的 support 目录留在项目内，测试永远不碰真实 home 或 /data。
+    private var support: URL!
+
+    override func setUpWithError() throws {
+        support = testScratchDirectory().appendingPathComponent("Application Support", isDirectory: true)
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
     }
 
-    func testUnexpectedLocationStaysNearBundle() {
-        let executable = URL(fileURLWithPath: "/private/var/empty/ring-probe/Ring.app/Contents/MacOS/Ring")
-        let root = ProjectPaths.projectRoot(forExecutable: executable)
-        XCTAssertFalse(root.path.contains("Application Support"))
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: support.deletingLastPathComponent())
+    }
+
+    /// 真实磁盘 fixture：只有带 Sources/RingCore 的源码工程才算工程构建。
+    private func makeCheckout(_ name: String) throws -> URL {
+        let root = support.deletingLastPathComponent().appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("Sources/RingCore", isDirectory: true),
+            withIntermediateDirectories: true)
+        return root
+    }
+
+    func testProjectBuildKeepsConfigurationInsideTheProject() throws {
+        let checkout = try makeCheckout("RingProj")
+        let executable = checkout.appendingPathComponent("build/Ring.app/Contents/MacOS/Ring")
+        XCTAssertEqual(ProjectPaths.projectRoot(forExecutable: executable)?.path, checkout.path)
+        XCTAssertEqual(ProjectPaths.dataDirectory(forExecutable: executable, supportDirectory: support).path,
+                       checkout.appendingPathComponent("data").path)
+    }
+
+    /// 工程内的验证输出（build/verification、build/candidate 之类）仍算同一个工程。
+    func testNestedBuildOutputStaysInsideTheProject() throws {
+        let checkout = try makeCheckout("RingNested")
+        for nested in ["build/verification/Ring.app", "build/candidate/Ring.app"] {
+            let executable = checkout.appendingPathComponent(nested + "/Contents/MacOS/Ring")
+            XCTAssertEqual(ProjectPaths.projectRoot(forExecutable: executable)?.path, checkout.path, nested)
+            XCTAssertEqual(ProjectPaths.dataDirectory(forExecutable: executable, supportDirectory: support).path,
+                           checkout.appendingPathComponent("data").path, nested)
+        }
+    }
+
+    /// 真实仓库里的构建：本文件所在检出目录下的 build/Ring.app 必须算工程构建。
+    func testTheRealCheckoutBuildUsesTheProjectData() {
+        let executable = projectRootFromSourceFile().appendingPathComponent("build/Ring.app/Contents/MacOS/Ring")
+        XCTAssertEqual(ProjectPaths.projectRoot(forExecutable: executable)?.path,
+                       projectRootFromSourceFile().path)
+    }
+
+    /// 用户只是把 app 放进了自己叫 build 的目录，不算本工程，配置必须走用户 support。
+    func testAUserFolderNamedBuildDoesNotHijackTheConfiguration() throws {
+        let userBuild = support.deletingLastPathComponent().appendingPathComponent("Downloads/build", isDirectory: true)
+        let executable = userBuild.appendingPathComponent("Ring.app/Contents/MacOS/Ring")
+        XCTAssertNil(ProjectPaths.projectRoot(forExecutable: executable))
+        XCTAssertEqual(ProjectPaths.dataDirectory(forExecutable: executable, supportDirectory: support).path,
+                       support.appendingPathComponent("Ring").path)
+    }
+
+    /// 装到任何常见位置都不是项目构建，配置必须落到用户的 Application Support/Ring，
+    /// 而不是从 bundle 往上数两层（那会给 /Applications 算出只读的 /data）。
+    func testInstalledAppsUseTheUserSupportFolder() {
+        for installed in ["/Applications/Ring.app/Contents/MacOS/Ring",
+                          "/Applications/build/Ring.app/Contents/MacOS/Ring",
+                          "/Users/example/Applications/Ring.app/Contents/MacOS/Ring",
+                          "/Users/example/Downloads/Ring.app/Contents/MacOS/Ring",
+                          "/Users/example/Downloads/build/Ring.app/Contents/MacOS/Ring",
+                          "/Users/example/Desktop/Ring.app/Contents/MacOS/Ring"] {
+            let executable = URL(fileURLWithPath: installed)
+            XCTAssertNil(ProjectPaths.projectRoot(forExecutable: executable), "安装位置不是项目构建：\(installed)")
+            XCTAssertEqual(ProjectPaths.dataDirectory(forExecutable: executable, supportDirectory: support).path,
+                           support.appendingPathComponent("Ring").path,
+                           "安装版配置必须落在注入的 support 目录：\(installed)")
+        }
+    }
+
+    /// 真实 SlotStore 落盘往返：写进安装版路径，读回同一份配置，并确认文件确实在注入目录内。
+    func testInstalledAppConfigurationRoundTripsThroughTheRealStore() throws {
+        let directory = ProjectPaths.dataDirectory(
+            forExecutable: URL(fileURLWithPath: "/Applications/Ring.app/Contents/MacOS/Ring"),
+            supportDirectory: support)
+        let store = SlotStore(directory: directory)
+        var slots = LauncherConfiguration.empty().slots
+        slots[2].app = AppReference(bundleIdentifier: "com.apple.Safari",
+                                    displayName: "Safari",
+                                    path: "/Applications/Safari.app")
+        let saved = LauncherConfiguration(slots: slots, visibleSlotCount: 5).normalized()
+
+        try store.save(saved)
+
+        XCTAssertEqual(store.fileURL.path, support.appendingPathComponent("Ring/configuration.json").path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL.path), "配置没有真的写下来")
+        let loaded = try SlotStore(directory: directory).load()
+        XCTAssertEqual(loaded, saved)
+        XCTAssertEqual(loaded.visibleSlotCount, 5)
+        XCTAssertEqual(loaded.slots[2].app?.bundleIdentifier, "com.apple.Safari")
     }
 }
 
@@ -1695,21 +1792,16 @@ final class HoldToLaunchTests: XCTestCase {
     }
 
     /// Before the first move (and after the highlight is cleared) there is no decision
-    /// yet. The gesture entry must still promise what a release does, and must match the
-    /// copy it shows once a move lands on blank space.
-    func testRestingCopyMatchesTheUnselectedState() {
-        XCTAssertEqual(RingCenter.restingText(mode: .holdToLaunch).action, "松开取消")
-        XCTAssertNil(RingCenter.restingText(mode: .holdToLaunch).title)
-
+    /// yet, and the centre says nothing: the ring's own disappearance is the cancel.
+    func testNoSelectionSaysNothing() {
         let ring = geometry()
         let blank = hold(inRingBlank(ring), ring: ring)
         XCTAssertNil(blank.slot, "环内空白不应选中任何槽")
-        let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: .holdToLaunch)
-        XCTAssertEqual(blankText.action, RingCenter.restingText(mode: .holdToLaunch).action,
-                       "未选中状态在有无 move 时文案必须一致")
-
-        XCTAssertNil(RingCenter.restingText(mode: .angularClick).action, "菜单入口保持安静")
-        XCTAssertNil(RingCenter.restingText(mode: .angularClick).title)
+        for mode in [RingInputMode.angularClick, .holdToLaunch] {
+            let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: mode)
+            XCTAssertNil(blankText.title, "\(mode) 未选中时不应有名字")
+            XCTAssertNil(blankText.action, "\(mode) 未选中时不应有动作文案")
+        }
     }
 
     func testGestureCentreCopyNeverPromisesAClick() {
@@ -1727,13 +1819,12 @@ final class HoldToLaunchTests: XCTestCase {
         let onEmpty = hold(world(CGPoint(x: emptyFrame.midX, y: emptyFrame.midY), in: ring), ring: ring, filled: withEmpty)
         let emptyText = RingCenter.text(for: onEmpty, names: names, filled: withEmpty, mode: .holdToLaunch)
         XCTAssertEqual(emptyText.title, "空位")
-        XCTAssertEqual(emptyText.action, "松开取消")
+        XCTAssertNil(emptyText.action, "空位只说明这里没有 app，不该再挂取消文案")
 
         let blank = hold(inRingBlank(ring), ring: ring)
         let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: .holdToLaunch)
         XCTAssertNil(blankText.title)
-        XCTAssertEqual(blankText.action, "松开取消")
-        XCTAssertEqual(RingCenterText.escapeHint, "Esc 取消")
+        XCTAssertNil(blankText.action)
     }
 
     /// The menu entry keeps its click wording and its angular rule.

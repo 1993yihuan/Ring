@@ -61,6 +61,18 @@ if [ ! -f "$ROOT/Packaging/Ring.icns" ]; then
 fi
 cp "$ROOT/Packaging/Ring.icns" "$APP/Contents/Resources/Ring.icns"
 
+echo "==> bundling the license"
+# MIT 要求版权声明随软件副本一起分发：DMG 里就是这个文件，不做二次生成。
+if [ ! -f "$ROOT/LICENSE" ]; then
+    echo "缺少许可证：$ROOT/LICENSE" >&2
+    exit 1
+fi
+cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+if ! cmp -s "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"; then
+    echo "包内 LICENSE 与根目录不一致：$APP/Contents/Resources/LICENSE" >&2
+    exit 1
+fi
+
 echo "==> ad-hoc signing the bundle"
 codesign --force --sign - --timestamp=none "$APP"
 
