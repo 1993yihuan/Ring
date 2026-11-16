@@ -52,6 +52,7 @@ struct SettingsView: View {
             HStack(alignment: .top, spacing: Layout.sectionSpacing) {
                 RingPreviewCard(slots: model.visibleSlots)
                     .frame(width: Layout.previewWidth)
+                    .frame(maxHeight: .infinity)
                 // The list takes the growing half: a shorter window scrolls it instead of
                 // squeezing the rows or leaving a hole under the card.
                 RingSlotsCard(model: model)
@@ -69,18 +70,17 @@ struct SettingsView: View {
 // MARK: - Preview column
 
 /// The ring as the user will meet it, drawn from the same slots and the same
-/// `RingLayout.slotOffset` the real panel uses, so the two cannot drift apart.
+/// `RingLayout.geometry` the real panel uses, so the two cannot drift apart.
 private struct RingPreviewCard: View {
     let slots: [Slot]
 
     var body: some View {
-        SettingsCard {
+        SettingsCard(stretchesVertically: true) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("环形预览")
                     .font(.system(size: 15, weight: .semibold))
                 SlotRingPreview(slots: slots)
-                    .aspectRatio(1, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("连续按两次同一侧 Option，快速打开环形启动器")
                     Text("按住第二次 Option 时移动指针选择，松开启动")
@@ -93,56 +93,113 @@ private struct RingPreviewCard: View {
     }
 }
 
-/// The same slot order the real ring uses, taken from RingLayout so the preview, the
-/// list numbers and the panel cannot drift apart.
+/// The static preview of the ring, reusing the real `RingMaterialView` and `RingView`
+/// with the exact same geometry proportions as the launcher, fitting adaptively
+/// inside the available area with drop shadows and no clipping.
 struct SlotRingPreview: View {
     let slots: [Slot]
 
     var body: some View {
-        GeometryReader { proxy in
-            let radius = min(proxy.size.width, proxy.size.height) * 0.33
-            ZStack {
-                Circle()
-                    .stroke(Color.accentColor.opacity(0.45), lineWidth: 1.5)
-                    .frame(width: radius * 2, height: radius * 2)
-                    .position(x: proxy.size.width / 2, y: proxy.size.height / 2)
-                ForEach(Array(slots.enumerated()), id: \.element.id) { index, slot in
-                    let offset = RingLayout.slotOffset(index, count: slots.count)
-                    tile(index: index, slot: slot)
-                        .frame(width: 38, height: 38)
-                        // SwiftUI's y axis points down, the layout's points up.
-                        .position(x: proxy.size.width / 2 + offset.x * radius,
-                                  y: proxy.size.height / 2 - offset.y * radius)
-                }
-            }
-        }
-        .accessibilityElement(children: .contain)
+        RingPreviewHostRepresentable(slots: slots)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("环形预览")
+    }
+}
+
+private struct RingPreviewHostRepresentable: NSViewRepresentable {
+    let slots: [Slot]
+
+    func makeNSView(context: Context) -> RingPreviewHostView {
+        let view = RingPreviewHostView()
+        view.update(slots: slots)
+        return view
     }
 
-    private func tile(index: Int, slot: Slot) -> some View {
-        ZStack {
-            Circle()
-                .fill(Color.primary.opacity(0.05))
-                .overlay(Circle().strokeBorder(Color.primary.opacity(0.12)))
-            if let path = slot.app?.path {
-                Image(nsImage: NSWorkspace.shared.icon(forFile: path))
-                    .resizable()
-                    .frame(width: 24, height: 24)
-            } else {
-                Image(systemName: "plus")
-                    .font(.system(size: 11, weight: .light))
-                    .foregroundStyle(.secondary)
-            }
+    func updateNSView(_ nsView: RingPreviewHostView, context: Context) {
+        nsView.update(slots: slots)
+    }
+}
+
+final class RingPreviewHostView: NSView {
+    private let materialView = RingMaterialView(frame: .zero)
+    private let ringView = RingView(frame: .zero)
+    private var slots: [Slot] = []
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        setup()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setup()
+    }
+
+    override var isFlipped: Bool { false }
+
+    private func setup() {
+        wantsLayer = true
+        layer?.masksToBounds = false
+        materialView.autoresizingMask = []
+        ringView.autoresizingMask = []
+        addSubview(materialView)
+        addSubview(ringView)
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        // Static preview: never intercepts clicks or hovers
+        nil
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        layoutPreview()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layoutPreview()
+    }
+
+    func update(slots: [Slot]) {
+        self.slots = slots
+        layoutPreview()
+    }
+
+    override func layout() {
+        super.layout()
+        layoutPreview()
+    }
+
+    private func layoutPreview() {
+        let containerBounds = bounds
+        guard containerBounds.width > 0, containerBounds.height > 0 else { return }
+
+        // Scale proportionally to fit the available box, centered with margins for drop shadows
+        let side = min(containerBounds.width, containerBounds.height)
+        guard side > 0 else { return }
+
+        let originX = (containerBounds.width - side) / 2
+        let originY = (containerBounds.height - side) / 2
+        let squareFrame = CGRect(x: originX, y: originY, width: side, height: side)
+
+        materialView.frame = squareFrame
+        ringView.frame = squareFrame
+
+        let geometry = RingLayout.geometry(slotCount: slots.count, side: side, panelOrigin: .zero)
+
+        materialView.selectedSlot = nil
+        materialView.prepare(geometry: geometry)
+
+        let items = slots.map { slot in
+            RingView.Item(name: slot.app?.displayName ?? "",
+                          icon: slot.app.map { NSWorkspace.shared.icon(forFile: $0.path) },
+                          isFilled: slot.app != nil)
         }
-        .overlay(alignment: .topTrailing) {
-            Text("\(index + 1)")
-                .font(.system(size: 8, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .padding(1)
-                .background(Circle().fill(Color(nsColor: .windowBackgroundColor)))
-                .offset(x: 3, y: -3)
-        }
-        .help(slot.app?.displayName ?? "空位 \(index + 1)")
+        ringView.present(geometry: geometry,
+                         items: items,
+                         mode: .angularClick,
+                         decision: nil)
     }
 }
 
@@ -404,7 +461,7 @@ private struct SettingsFooterView: View {
 /// hairline edge, so the page reads as layers instead of a single grey sheet.
 private struct SettingsCard<Content: View>: View {
     var padding: CGFloat = Layout.cardPadding
-    /// Only the card next to the preview stretches; the others stay as tall as they read.
+    /// Both the preview card and the slots card stretch vertically so their borders line up evenly.
     var stretchesVertically: Bool = false
     @ViewBuilder var content: Content
 

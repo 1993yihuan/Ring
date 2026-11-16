@@ -100,28 +100,21 @@ public enum RingLayout {
     /// The website's ring is one fixed set of proportions; the screen only decides how many
     /// points one canvas unit is worth. Drawing and hit frames are scaled by the same unit,
     /// so they cannot drift apart.
-    private static func layout(slotCount: Int,
-                               mouse: CGPoint,
-                               visible: CGRect,
-                               metrics: RingMetrics) -> RingGeometry? {
+    /// Builds the ring geometry for a given slot count and panel side length.
+    /// Both the runtime launcher and the settings preview use this exact same geometry,
+    /// ensuring zero drift in proportions, slot offsets, icon sizes and shadow insets.
+    public static func geometry(slotCount: Int,
+                                side: CGFloat,
+                                panelOrigin: CGPoint = .zero) -> RingGeometry {
         let count = max(slotCount, 1)
+        let safeSide = max(side, 0)
         let nominal = 2 * (RingPresentation.outerRadius + RingPresentation.shadowInset)
-        // The designed size is one constant; a screen too small for it only shrinks further.
-        let unit = min(RingPresentation.defaultScale, min(visible.width, visible.height) / nominal)
+        let unit = safeSide / nominal
         let drawnIcon = RingPresentation.iconSize * unit
-        guard drawnIcon >= metrics.hardMinIconSize else { return nil }
-
-        let side = nominal * unit
-        let size = CGSize(width: side, height: side)
-        guard size.width <= visible.width, size.height <= visible.height else { return nil }
-
-        let clampedX = min(max(mouse.x - size.width / 2, visible.minX), visible.maxX - size.width)
-        let clampedY = min(max(mouse.y - size.height / 2, visible.minY), visible.maxY - size.height)
-        let panelFrame = CGRect(origin: CGPoint(x: clampedX, y: clampedY), size: size)
-
-        let centre = CGPoint(x: side / 2, y: side / 2)
         let hitSide = RingPresentation.hitSide(drawnIcon: drawnIcon)
         let iconRadius = RingPresentation.iconRadius * unit
+        let centre = CGPoint(x: safeSide / 2, y: safeSide / 2)
+
         var iconFrames: [CGRect] = []
         iconFrames.reserveCapacity(count)
         for slot in 0..<count {
@@ -134,19 +127,42 @@ public enum RingLayout {
                                      height: hitSide))
         }
 
-        // The centre cancels across the whole see-through hole, so the target the user aims
-        // at is the opening they can actually see.
         let cancelSide = 2 * RingPresentation.holeRadius * unit
         let cancelFrame = CGRect(x: centre.x - cancelSide / 2,
                                  y: centre.y - cancelSide / 2,
                                  width: cancelSide,
                                  height: cancelSide)
 
-        return RingGeometry(panelFrame: panelFrame,
+        return RingGeometry(panelFrame: CGRect(origin: panelOrigin, size: CGSize(width: safeSide, height: safeSide)),
                             iconFrames: iconFrames,
                             cancelFrame: cancelFrame,
                             iconSize: hitSide,
                             plateInset: RingPresentation.shadowInset * unit)
+    }
+
+    /// The website's ring is one fixed set of proportions; the screen only decides how many
+    /// points one canvas unit is worth. Drawing and hit frames are scaled by the same unit,
+    /// so they cannot drift apart.
+    private static func layout(slotCount: Int,
+                                mouse: CGPoint,
+                                visible: CGRect,
+                                metrics: RingMetrics) -> RingGeometry? {
+        let nominal = 2 * (RingPresentation.outerRadius + RingPresentation.shadowInset)
+        // The designed size is one constant; a screen too small for it only shrinks further.
+        let unit = min(RingPresentation.defaultScale, min(visible.width, visible.height) / nominal)
+        let drawnIcon = RingPresentation.iconSize * unit
+        guard drawnIcon >= metrics.hardMinIconSize else { return nil }
+
+        let side = nominal * unit
+        let size = CGSize(width: side, height: side)
+        guard size.width <= visible.width, size.height <= visible.height else { return nil }
+
+        let clampedX = min(max(mouse.x - size.width / 2, visible.minX), visible.maxX - size.width)
+        let clampedY = min(max(mouse.y - size.height / 2, visible.minY), visible.maxY - size.height)
+
+        return geometry(slotCount: slotCount,
+                        side: side,
+                        panelOrigin: CGPoint(x: clampedX, y: clampedY))
     }
 
     public static func hitTest(_ geometry: RingGeometry, screenPoint: CGPoint) -> RingHit {

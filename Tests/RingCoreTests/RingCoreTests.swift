@@ -400,6 +400,104 @@ final class LayoutTests: XCTestCase {
             XCTAssertGreaterThan(hovered.width, idle.width)
         }
     }
+
+    /// Pure geometry extraction must produce bit-for-bit identical geometry to runtime launcher layout.
+    func testPureGeometryExtractionMatchesRuntimeLayout() {
+        for count in 3...8 {
+            let mouse = CGPoint(x: 650, y: 450)
+            let runtimeGeometry = try! XCTUnwrap(RingLayout.geometry(slotCount: count,
+                                                                     mouse: mouse,
+                                                                     screens: [screen],
+                                                                     visibleFrames: [visible]))
+            let side = runtimeGeometry.panelFrame.width
+            let extracted = RingLayout.geometry(slotCount: count,
+                                                side: side,
+                                                panelOrigin: runtimeGeometry.panelFrame.origin)
+
+            XCTAssertEqual(extracted.panelFrame, runtimeGeometry.panelFrame, "Panel frames must match exactly")
+            XCTAssertEqual(extracted.iconFrames, runtimeGeometry.iconFrames, "Icon frames must match exactly")
+            XCTAssertEqual(extracted.cancelFrame, runtimeGeometry.cancelFrame, "Cancel frame must match exactly")
+            XCTAssertEqual(extracted.iconSize, runtimeGeometry.iconSize, accuracy: 0.0001, "Icon size must match")
+            XCTAssertEqual(extracted.plateInset, runtimeGeometry.plateInset, accuracy: 0.0001, "Plate inset must match")
+            XCTAssertEqual(extracted.plateRect, runtimeGeometry.plateRect, "Plate rect must match")
+        }
+    }
+
+    /// Pure geometry scales proportionally across arbitrary sizes without being clamped to 0.5 default scale.
+    func testPureGeometryScalesProportionallyAcrossArbitrarySides() {
+        let smallSide: CGFloat = 100
+        let largeSide: CGFloat = 424 // nominal full canvas scale
+        for count in 3...8 {
+            let small = RingLayout.geometry(slotCount: count, side: smallSide)
+            let large = RingLayout.geometry(slotCount: count, side: largeSide)
+
+            let scaleRatio = largeSide / smallSide // 4.24
+            XCTAssertEqual(large.iconSize / small.iconSize, scaleRatio, accuracy: 0.001)
+            XCTAssertEqual(large.plateInset / small.plateInset, scaleRatio, accuracy: 0.001)
+            XCTAssertEqual(large.cancelFrame.width / small.cancelFrame.width, scaleRatio, accuracy: 0.001)
+            XCTAssertEqual(large.plateRect.width / small.plateRect.width, scaleRatio, accuracy: 0.001)
+
+            // At nominal 424, plate diameter should be exactly 2 * 172 = 344, inset 40
+            XCTAssertEqual(large.panelFrame.width, 424, accuracy: 0.001)
+            XCTAssertEqual(large.plateInset, 40, accuracy: 0.001)
+            XCTAssertEqual(large.plateRect.width, 344, accuracy: 0.001)
+            XCTAssertEqual(large.plateRect.midX, 212, accuracy: 0.001)
+            XCTAssertEqual(large.plateRect.midY, 212, accuracy: 0.001)
+        }
+    }
+
+    /// All slot counts (3..8) keep non-overlapping hit frames, centered layout and clear center opening.
+    func testPureGeometryMaintainsNoOverlapAndCenteredAtAllSlotCounts() {
+        let sides: [CGFloat] = [120, 200, 280, 360, 500]
+        for side in sides {
+            for count in 3...8 {
+                let geom = RingLayout.geometry(slotCount: count, side: side)
+                XCTAssertEqual(geom.iconFrames.count, count)
+                XCTAssertEqual(geom.panelFrame.size, CGSize(width: side, height: side))
+
+                // Plate is centered
+                XCTAssertEqual(geom.plateRect.midX, side / 2, accuracy: 0.001)
+                XCTAssertEqual(geom.plateRect.midY, side / 2, accuracy: 0.001)
+
+                // Cancel frame is centered
+                XCTAssertEqual(geom.cancelFrame.midX, side / 2, accuracy: 0.001)
+                XCTAssertEqual(geom.cancelFrame.midY, side / 2, accuracy: 0.001)
+
+                // Center hole and icons maintain clear radial separation
+                let discRadius = geom.cancelFrame.width / 2
+                let unit = side / (2 * (RingPresentation.outerRadius + RingPresentation.shadowInset))
+                let iconDrawnRadius = RingPresentation.iconSize * unit / 2
+                let centre = CGPoint(x: side / 2, y: side / 2)
+                for frame in geom.iconFrames {
+                    let distance = hypot(frame.midX - centre.x, frame.midY - centre.y)
+                    XCTAssertGreaterThanOrEqual(distance, discRadius + iconDrawnRadius, "图标绘制圆不应侵入中心取消孔")
+                    XCTAssertTrue(geom.panelFrame.contains(frame), "槽位命中框必须落在面板内")
+                }
+
+                // No two icon frames overlap
+                for i in 0..<count {
+                    for j in (i + 1)..<count {
+                        XCTAssertFalse(geom.iconFrames[i].intersects(geom.iconFrames[j]),
+                                       "\(count) 槽在边长 \(side) 下槽位 \(i) 与 \(j) 重叠")
+                    }
+                }
+            }
+        }
+    }
+
+    /// Pure geometry handles zero or negative side safely without crashing or returning NaN.
+    func testPureGeometryZeroAndNegativeSideSafety() {
+        for badSide in [CGFloat(0), CGFloat(-50)] {
+            let geom = RingLayout.geometry(slotCount: 6, side: badSide)
+            XCTAssertEqual(geom.panelFrame.width, 0)
+            XCTAssertEqual(geom.panelFrame.height, 0)
+            XCTAssertEqual(geom.iconFrames.count, 6)
+            for frame in geom.iconFrames {
+                XCTAssertFalse(frame.origin.x.isNaN)
+                XCTAssertFalse(frame.origin.y.isNaN)
+            }
+        }
+    }
 }
 
 final class RingCenterTests: XCTestCase {
