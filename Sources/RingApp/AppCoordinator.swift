@@ -670,10 +670,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             // still reach. Before that the page reported 1185 pt of minimum
             // height on a 1090 pt screen, and the window opened past the display and
             // could not be dragged back.
-            let hosting = NSHostingController(rootView: SettingsView(model: model))
+            // One navigation shell around the page that already exists: the ring page is
+            // embedded untouched, the other four sidebar pages are placeholders.
+            let hosting = NSHostingController(rootView: SettingsRootView(model: model))
             let window = NSWindow(contentViewController: hosting)
-            // The native title bar carries the name: the page itself must not repeat it.
+            // The native title bar carries the name: the page itself must not repeat it. The
+            // title text and the bar's own background are hidden so the window reads as one
+            // surface; the content still starts below the title bar (there is no full-size
+            // content view), so the sidebar begins under the traffic lights, not behind them.
             window.title = "Ring 设置"
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
             // Resizable because the slot list and the permission text both change length;
             // the page scrolls its list instead of growing the window on every message.
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]

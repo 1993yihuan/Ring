@@ -2151,8 +2151,13 @@ final class SettingsWindowGeometryTests: XCTestCase {
     private let laptop = CGRect(x: 0, y: 0, width: 1792, height: 1090)
 
     func testRoomyScreenGetsTheDesignedDefaultAndMinimum() {
-        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop), CGSize(width: 960, height: 640))
-        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop), CGSize(width: 720, height: 520))
+        // 左侧栏占 200 pt：窗口 = 侧栏 + 详情列，详情列仍是原来的 960 / 720。
+        XCTAssertEqual(SettingsWindowGeometry.sidebarWidth, 200)
+        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop), CGSize(width: 1160, height: 640))
+        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop), CGSize(width: 920, height: 520))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: laptop), CGSize(width: 720, height: 520))
+        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop).width
+                        - SettingsWindowGeometry.sidebarWidth, 960)
     }
 
     /// A short screen cannot hold 640 pt of content plus a title bar: the window must give
@@ -2161,8 +2166,10 @@ final class SettingsWindowGeometryTests: XCTestCase {
         let short = CGRect(x: 0, y: 0, width: 1024, height: 600)
         let content = SettingsWindowGeometry.contentSize(fitting: short)
         let minimum = SettingsWindowGeometry.minimumSize(fitting: short)
+        // 高度按屏幕压到 520；宽度仍放得下 侧栏 + 720 详情。
         XCTAssertEqual(content, CGSize(width: 944, height: 520))
-        XCTAssertEqual(minimum, CGSize(width: 720, height: 520))
+        XCTAssertEqual(minimum, CGSize(width: 920, height: 520))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: short), CGSize(width: 720, height: 520))
         XCTAssertLessThanOrEqual(content.height, minimum.height == 0 ? 0 : short.height - 2 * SettingsWindowGeometry.screenInset)
         XCTAssertLessThanOrEqual(minimum.width, content.width)
         XCTAssertLessThanOrEqual(minimum.height, content.height)
@@ -2172,9 +2179,28 @@ final class SettingsWindowGeometryTests: XCTestCase {
         let tiny = CGRect(x: 0, y: 0, width: 800, height: 500)
         let content = SettingsWindowGeometry.contentSize(fitting: tiny)
         let minimum = SettingsWindowGeometry.minimumSize(fitting: tiny)
+        // 屏宽 800 放不下 920：窗口被压到 720，详情列随之只有 520，页面自己滚动。
         XCTAssertEqual(content, CGSize(width: 720, height: 420))
         XCTAssertEqual(minimum, CGSize(width: 720, height: 420))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: tiny), CGSize(width: 520, height: 420))
         XCTAssertLessThanOrEqual(minimum.height, content.height)
+        XCTAssertLessThanOrEqual(SettingsWindowGeometry.sidebarWidth
+                                    + SettingsWindowGeometry.detailMinimumSize(fitting: tiny).width,
+                                 minimum.width)
+    }
+
+    /// A screen narrower than the sidebar plus the page floor: the window is what is left, so
+    /// the detail has to give way with it instead of demanding more than the screen holds.
+    func testAScreenNarrowerThanSidebarPlusFloorStillFits() {
+        for width in [620, 700, 760] as [CGFloat] {
+            let narrow = CGRect(x: 0, y: 0, width: width, height: 600)
+            let minimum = SettingsWindowGeometry.minimumSize(fitting: narrow)
+            let detail = SettingsWindowGeometry.detailMinimumSize(fitting: narrow)
+            XCTAssertLessThanOrEqual(minimum.width, width - 2 * SettingsWindowGeometry.screenInset)
+            XCTAssertEqual(SettingsWindowGeometry.sidebarWidth + detail.width, minimum.width,
+                           "侧栏 + 详情下限必须正好落在窗口最小宽度里（屏宽 \(width)）")
+            XCTAssertGreaterThan(detail.width, 0)
+        }
     }
 
     /// The window is centred when it fits, and pulled inside when the system centred it
@@ -2540,5 +2566,28 @@ final class EntranceDurationConfigurationTests: XCTestCase {
         XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 0, reduceMotion: false), 0)
         XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 0), 0, accuracy: 1e-9)
         XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.001, milliseconds: 0), 1, accuracy: 1e-9)
+    }
+}
+
+/// The sidebar's five pages: their order, their names and the symbols that stand for them. The
+/// detail view switches on exactly these cases, so a page cannot be shown under another name.
+final class SettingsSectionTests: XCTestCase {
+    func testTheFivePagesKeepTheirOrderAndNames() {
+        XCTAssertEqual(SettingsSection.allCases.map(\.title),
+                       ["环形设置", "触发与手势", "权限与安全", "通用设置", "关于"])
+        XCTAssertEqual(SettingsSection.allCases.map(\.symbolName),
+                       ["circle.dashed", "keyboard", "shield.lefthalf.filled", "gearshape", "info.circle"])
+    }
+
+    func testEveryPageHasItsOwnStableIdentity() {
+        let ids = SettingsSection.allCases.map(\.id)
+        XCTAssertEqual(ids, ["ring", "triggers", "permissions", "general", "about"])
+        XCTAssertEqual(Set(ids).count, 5, "导航项不能有重复身份")
+    }
+
+    /// The app always opens on the ring page; a stored page is never remembered.
+    func testTheFirstPageIsTheRingSettings() {
+        XCTAssertEqual(SettingsSection.allCases.first, .ring)
+        XCTAssertEqual(SettingsSection.ring.title, "环形设置")
     }
 }

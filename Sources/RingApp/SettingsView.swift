@@ -41,10 +41,12 @@ struct SettingsView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.visibleSlotCount)
     }
 
+    /// The page's own floor. Inside the settings window it is the detail column beside the
+    /// sidebar, so the same screen may hold a narrower page than the window minimum suggests.
     private var minimumSize: CGSize {
         let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
             ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
-        return SettingsWindowGeometry.minimumSize(fitting: visible)
+        return SettingsWindowGeometry.detailMinimumSize(fitting: visible)
     }
 
     private var page: some View {
