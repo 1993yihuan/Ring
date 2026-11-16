@@ -207,6 +207,9 @@ final class RingPreviewHostView: NSView {
 
 private struct RingSlotsCard: View {
     @ObservedObject var model: SettingsModel
+    /// Leaving the field is a commit, like Return: a number the user typed must not stay
+    /// only on screen while the saved ring keeps the old timing.
+    @FocusState private var durationFieldFocused: Bool
 
     /// Only the visible prefix counts: a hidden app is not "configured" on the ring.
     private var filledCount: Int {
@@ -239,6 +242,31 @@ private struct RingSlotsCard: View {
                     // beside it into a vertical stack of characters.
                     .frame(minWidth: 160, idealWidth: 240, maxWidth: 240)
                     Spacer(minLength: 0)
+                }
+                HStack(spacing: 12) {
+                    Text("圆环展开时长")
+                        .font(.system(size: 13))
+                    TextField("\(LauncherConfiguration.defaultEntranceDurationMilliseconds)",
+                              text: Binding(get: { model.entranceDurationText },
+                                            set: { model.updateEntranceDurationText($0) }))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 76)
+                        .focused($durationFieldFocused)
+                        .onSubmit { model.commitEntranceDuration() }
+                        .help("毫秒；0 表示立即显示")
+                    Text("毫秒，0…2000；0 表示立即显示")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                .onChange(of: durationFieldFocused) { focused in
+                    if !focused { model.commitEntranceDuration() }
+                }
+                if let message = model.entranceDurationError {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 slotList
                 Text("拖动排序；移除后保留空位，编号与左侧环一致。减少数量只隐藏，调大可恢复。")
@@ -489,6 +517,13 @@ final class SettingsModel: ObservableObject {
     /// How many leading slots the list, the preview and the ring show. The full array is
     /// always kept, so lowering this only hides slots.
     @Published var visibleSlotCount: Int
+    /// How long the ring takes to open, in whole milliseconds; 0 shows it at once.
+    @Published var entranceDurationMilliseconds: Int
+    /// Exactly what the field shows. Nothing is saved while the text cannot be parsed; a
+    /// number that does parse (even a short one on the way to a longer one) is what a commit
+    /// saves, because the field is what the page shows.
+    @Published var entranceDurationText: String
+    @Published var entranceDurationError: String?
     @Published var status: PermissionStatus
     @Published var permissionMessage: String?
     @Published var lastError: String?
@@ -505,6 +540,8 @@ final class SettingsModel: ObservableObject {
         self.config = config.normalized()
         self.slots = self.config.slots
         self.visibleSlotCount = self.config.visibleSlotCount
+        self.entranceDurationMilliseconds = self.config.entranceDurationMilliseconds
+        self.entranceDurationText = String(self.config.entranceDurationMilliseconds)
         self.store = store
         self.status = status
     }
@@ -587,6 +624,30 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
+    /// Types into the field only; nothing is written until the text is committed.
+    func updateEntranceDurationText(_ text: String) {
+        entranceDurationText = text
+        entranceDurationError = nil
+    }
+
+    /// Return or leaving the field. A value that is not a whole number of milliseconds in
+    /// range is refused in words and the field goes back to the saved value: the page never
+    /// shows a timing the ring will not use.
+    func commitEntranceDuration() {
+        guard let typed = LauncherConfiguration.entranceMilliseconds(fromInput: entranceDurationText) else {
+            entranceDurationError = "展开时长需为 0…2000 之间的整数毫秒，已恢复为 \(entranceDurationMilliseconds)"
+            entranceDurationText = String(entranceDurationMilliseconds)
+            return
+        }
+        entranceDurationError = nil
+        guard typed != entranceDurationMilliseconds else {
+            entranceDurationText = String(typed)
+            return
+        }
+        entranceDurationMilliseconds = typed
+        commit()
+    }
+
     func save() {
         commit()
     }
@@ -613,18 +674,35 @@ final class SettingsModel: ObservableObject {
     }
 
     private func commit() {
+        // The duration field is part of what the page shows, so a commit takes it too: an
+        // entry that is not a whole number in range is replaced by the saved value with a
+        // message instead of reaching the file, and the rest of the page still saves.
+        if let typed = LauncherConfiguration.entranceMilliseconds(fromInput: entranceDurationText) {
+            entranceDurationMilliseconds = typed
+            entranceDurationError = nil
+        } else {
+            entranceDurationError = "展开时长需为 0…2000 之间的整数毫秒，已恢复为 \(entranceDurationMilliseconds)"
+            entranceDurationText = String(entranceDurationMilliseconds)
+        }
         var updated = config
         updated.slots = slots
         updated.visibleSlotCount = visibleSlotCount
+        updated.entranceDurationMilliseconds = entranceDurationMilliseconds
         do {
             let normalized = updated.normalized()
             try store.save(normalized)
             config = normalized
             slots = normalized.slots
+            entranceDurationMilliseconds = normalized.entranceDurationMilliseconds
+            entranceDurationText = String(normalized.entranceDurationMilliseconds)
             lastError = nil
             onConfigChange?(normalized)
         } catch {
-            lastError = "\(error)"
+            // Nothing was written: the field goes back to the value the file really holds,
+            // so "saved" on screen and "saved" in the file cannot disagree.
+            entranceDurationMilliseconds = config.entranceDurationMilliseconds
+            entranceDurationText = String(entranceDurationMilliseconds)
+            lastError = "未保存：\(error)"
         }
     }
 }

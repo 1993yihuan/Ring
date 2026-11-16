@@ -3,8 +3,11 @@ import RingCore
 
 /// The ring's plate: the website's warm off-white band with its grain, its two hairlines on
 /// each edge, its two drop shadows and the cyan wash on the selected slot, all clipped by
-/// one ring-shaped mask whose stroke is as wide as the band. The band is complete from the
-/// first frame: nothing here animates.
+/// one ring-shaped mask whose stroke is as wide as the band.
+///
+/// The launcher may scale and fade this whole view as one material: the icons are a sibling
+/// view, so they keep their final rects. Nothing here animates on its own; only the explicit
+/// calls below, which the settings preview never makes, add an animation.
 ///
 /// Hit testing stays in RingCore. Nothing here is asked which slot is under the pointer.
 final class RingMaterialView: NSView {
@@ -38,12 +41,17 @@ final class RingMaterialView: NSView {
     private var geometry: RingGeometry?
     private var grainPixels = CGSize.zero
     private var grainScale: CGFloat = 0
+    /// The exit fades the panel's shared layer, not this one: the icons are a sibling view.
+    private static let panelFadeKey = "ring.panel.exit"
+    private static let highlightFadeKey = "ring.highlight.opacity"
 
     /// Which slot the pointer is on. The wash moves; the icons never do.
     var selectedSlot: Int? {
         didSet {
             guard oldValue != selectedSlot else { return }
-            layoutWash()
+            // A real target change is what animates, not a differing opacity: a stable
+            // highlight that moves from one slot to the next also keeps opacity 1.
+            layoutWash(animate: true)
         }
     }
 
@@ -193,12 +201,98 @@ final class RingMaterialView: NSView {
         }
         CATransaction.commit()
 
-        layoutWash()
+        layoutWash(animate: false)
+    }
+
+    // MARK: - Launcher entrance and exit
+
+    /// The ring appears by being uncovered clockwise from 12 o'clock, straight from the
+    /// configured centre. This view is masked as one material, so the band, both hairlines,
+    /// both shadows and the highlight are uncovered by the same edge; its own ring-shaped
+    /// clip stays on the inner `material` layer, untouched. Nothing is scaled or faded.
+    func beginSweep(duration: TimeInterval, completion: @escaping () -> Void) {
+        guard let layer, let geometry else { completion(); return }
+        clearSweep()
+        let plate = geometry.plateRect
+        let centre = CGPoint(x: plate.midX, y: plate.midY)
+        let mask = RingSweepReveal.mask(centre: centre,
+                                        radius: hypot(bounds.width, bounds.height),
+                                        frame: bounds,
+                                        scale: window?.backingScaleFactor ?? 2)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.mask = mask
+        CATransaction.commit()
+        RingSweepReveal.animate(mask, duration: duration, completion: completion)
+    }
+
+    /// The finished picture is the original drawing: the reveal mask is removed rather than
+    /// left at full, so the last frame adds no seam at 12 o'clock.
+    func clearSweep() {
+        guard let layer, layer.mask != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        layer.mask = nil
+        CATransaction.commit()
+    }
+
+    /// Keeps the sector the frame shows, so an interrupted entrance fades out with the part it
+    /// had uncovered instead of finishing first.
+    func freezeSweep() {
+        RingSweepReveal.freeze(layer?.mask)
+    }
+
+    /// Leaving fades the whole picture — plate, shadows and the icons beside it — from what
+    /// is on screen right now. `container` is the layer that holds both views, so the icons
+    /// cannot be cut off while the plate is still fading.
+    func playExit(in container: CALayer, duration: TimeInterval, completion: @escaping () -> Void) {
+        // An entrance may still be running. Its sector is frozen where the frame shows it, so
+        // leaving does not flash the rest of the ring in first.
+        freezeSweep()
+        let from = container.presentation()?.opacity ?? container.opacity
+        container.removeAnimation(forKey: Self.panelFadeKey)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        container.opacity = 0
+        guard duration > 0 else {
+            CATransaction.commit()
+            completion()
+            return
+        }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = from
+        fade.toValue = 0
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        CATransaction.setCompletionBlock(completion)
+        container.add(fade, forKey: Self.panelFadeKey)
+        CATransaction.commit()
+    }
+
+    /// The next round starts from a fully opaque picture: a fade the previous round left on
+    /// the panel cannot dim it, and its completion is ignored by the generation anyway.
+    func resetPanel(in container: CALayer) {
+        container.removeAnimation(forKey: Self.panelFadeKey)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        container.opacity = 1
+        CATransaction.commit()
+    }
+
+    /// Reduce Motion takes effect at once: a highlight fade still running is dropped, and the
+    /// wash stays at the value the model already holds.
+    func finishHighlight() {
+        washHost.removeAnimation(forKey: Self.highlightFadeKey)
     }
 
     /// The wash sits on the band under the selected slot: the website's `<ellipse rx="58"
-    /// ry="46">` turned to face that slot, so its long side runs around the band.
-    private func layoutWash() {
+    /// ry="46">` turned to face that slot, so its long side runs around the band. A new
+    /// target is a 50 ms fade only: the icons and the hit frames stay where they are, so
+    /// the target under the pointer never moves.
+    /// `animate` says a target really changed. A layout for the same target — every
+    /// settings preview draw, a re-prepare, a resize — writes the values and animates
+    /// nothing, so the shared drawing stays static where it is not the launcher.
+    private func layoutWash(animate: Bool) {
         guard let geometry else { return }
         let plate = geometry.plateRect
         let unit = RingPresentation.unit(plateRect: plate)
@@ -206,6 +300,12 @@ final class RingMaterialView: NSView {
         // One transaction with no early return: every layer write stays inside it, so the
         // no-animation guarantee is structural rather than a control-flow argument.
         let slot = selectedSlot.flatMap { geometry.iconFrames.indices.contains($0) ? $0 : nil }
+        let duration = animate ? RingLaunchAnimation.highlightDuration(
+            reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) : 0
+        if !animate { washHost.removeAnimation(forKey: Self.highlightFadeKey) }
+        // What the highlight shows right now, before this write: a rapid sweep re-targets
+        // from the frame on screen rather than from the previous model value.
+        let fromOpacity = washHost.presentation()?.opacity ?? washHost.opacity
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         washHost.opacity = slot == nil ? 0 : 1
@@ -220,6 +320,16 @@ final class RingMaterialView: NSView {
             wash.transform = CATransform3DMakeRotation(atan2(offset.y, offset.x) - .pi / 2, 0, 0, 1)
         }
         CATransaction.commit()
+
+        guard duration > 0 else { return }
+        let fade = CABasicAnimation(keyPath: "opacity")
+        // A new target appears where it now is, so it fades in from 0 there; a cleared one
+        // fades out from what is on screen. Either way the wash itself does not travel.
+        fade.fromValue = slot == nil ? fromOpacity : 0
+        fade.toValue = washHost.opacity
+        fade.duration = duration
+        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+        washHost.add(fade, forKey: Self.highlightFadeKey)
     }
 
     private func circle(centre: CGPoint, radius: CGFloat) -> CGPath {

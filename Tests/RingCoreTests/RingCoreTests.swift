@@ -2213,3 +2213,332 @@ final class SettingsWindowGeometryTests: XCTestCase {
         }
     }
 }
+
+/// The launcher's own entrance and exit: the numbers a frame shows, and the generation
+/// that keeps a slow fade from hiding the ring that replaced it.
+final class RingLaunchAnimationTests: XCTestCase {
+    private let accuracy: CGFloat = 0.0001
+
+    /// The screen points that decide whether the reveal reads clockwise: 12 o'clock at 0°,
+    /// 3 o'clock at 90°, 6 at 180°, 9 at 270°.
+    private func point(at degrees: Double, from centre: CGPoint, distance: CGFloat = 60) -> CGPoint {
+        let radians = (90 - degrees) * .pi / 180
+        return CGPoint(x: centre.x + distance * cos(radians), y: centre.y + distance * sin(radians))
+    }
+
+    /// A quarter of the time uncovers the quarter from 12 o'clock to 3 o'clock, and nothing
+    /// beyond it: the sweep starts at the top and runs clockwise on screen.
+    func testAQuarterOfTheTimeUncoversTwelveToThree() {
+        let centre = CGPoint(x: 106, y: 106)
+        let progress = RingLaunchAnimation.sweepProgress(at: 0.035, milliseconds: 140)
+        XCTAssertEqual(progress, 0.25, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepDegrees(progress: progress), 90, accuracy: 1e-9)
+
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 15, from: centre), centre: centre, progress: progress))
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 89.9, from: centre), centre: centre, progress: progress))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 90.1, from: centre), centre: centre, progress: progress))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 180, from: centre), centre: centre, progress: progress))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: progress))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 359, from: centre), centre: centre, progress: progress))
+    }
+
+    /// Half the time is the right half of the circle, three quarters is everything except the
+    /// upper-left quadrant, and the full time is the whole ring.
+    func testHalfThreeQuartersAndCompleteCoverTheRemainingQuadrants() {
+        let centre = CGPoint(x: 106, y: 106)
+        let half = RingLaunchAnimation.sweepProgress(at: 0.07, milliseconds: 140)
+        XCTAssertEqual(half, 0.5, accuracy: 1e-9)
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 90, from: centre), centre: centre, progress: half))
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 180, from: centre), centre: centre, progress: half))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: half))
+
+        let threeQuarters = RingLaunchAnimation.sweepProgress(at: 0.105, milliseconds: 140)
+        XCTAssertEqual(threeQuarters, 0.75, accuracy: 1e-9)
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: threeQuarters))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 300, from: centre), centre: centre, progress: threeQuarters),
+                       "9 点之后的那一段还没扫到")
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 350, from: centre), centre: centre, progress: threeQuarters))
+
+        let complete = RingLaunchAnimation.sweepProgress(at: 0.14, milliseconds: 140)
+        for degrees in [0.1, 90, 180, 270, 359] {
+            XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: degrees, from: centre), centre: centre, progress: complete))
+        }
+    }
+
+    /// Linear over the configured total, clamped at both ends, whatever the total is.
+    func testProgressIsLinearOverTheConfiguredTime() {
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 275), 0, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.06875, milliseconds: 275), 0.25, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.1375, milliseconds: 275), 0.5, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.20625, milliseconds: 275), 0.75, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.275, milliseconds: 275), 1, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 9, milliseconds: 275), 1, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: -1, milliseconds: 275), 0, accuracy: 1e-9)
+        // 0 毫秒没有入场时间：一开始就是完整画面。
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 0), 0, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.001, milliseconds: 0), 1, accuracy: 1e-9)
+    }
+
+    /// The angle is the one the user sees on a y-up layer: clockwise from 12 o'clock, so a
+    /// point on the +y axis is 0° and one just clockwise of it is a small positive angle.
+    func testTheAngleIsClockwiseFromTwelveOnAYUpLayer() {
+        let centre = CGPoint(x: 106, y: 106)
+        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 106, y: 166), centre: centre), 0, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 166, y: 106), centre: centre), 90, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 106, y: 46), centre: centre), 180, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 46, y: 106), centre: centre), 270, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 107, y: 166), centre: centre), 0.9548, accuracy: 0.001,
+                       "12 点稍右一点就是刚开始扫过的方向")
+    }
+
+    /// The mask's path is one arc that starts at 12 o'clock and closes the circle, so a stroke
+    /// end of a quarter is the quarter arc and not a chord.
+    func testTheArcPathStartsAtTwelveAndCoversTheWholeCircle() {
+        let centre = CGPoint(x: 106, y: 106)
+        let radius: CGFloat = 150
+        let path = RingLaunchAnimation.sweepArcPath(centre: centre, radius: radius)
+        XCTAssertFalse(path.isEmpty)
+        let box = path.boundingBoxOfPath
+        XCTAssertEqual(box.midX, centre.x, accuracy: 0.5)
+        XCTAssertEqual(box.midY, centre.y, accuracy: 0.5)
+        XCTAssertEqual(box.width, radius * 2, accuracy: 1)
+        // The mask is a *stroke* of this arc, not a fill: what matters is that the arc runs
+        // the whole circle (the box above) and that nothing outside it can be uncovered.
+        XCTAssertFalse(path.contains(CGPoint(x: 106, y: 106 + 200)), "弧半径之外")
+    }
+
+    /// Reduce Motion is the same picture with every duration at zero; the callers then take
+    /// the one branch that writes the final values and finishes at once.
+    func testReduceMotionCollapsesEveryDurationAndChangesNothingElse() {
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 140, reduceMotion: true), 0)
+        XCTAssertEqual(RingLaunchAnimation.exitDuration(reduceMotion: true), 0)
+        XCTAssertEqual(RingLaunchAnimation.highlightDuration(reduceMotion: true), 0)
+
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 140, reduceMotion: false), 0.14, accuracy: 0.000001)
+        XCTAssertEqual(RingLaunchAnimation.exitDuration(reduceMotion: false), 0.06, accuracy: 0.000001)
+        XCTAssertEqual(RingLaunchAnimation.highlightDuration(reduceMotion: false), 0.05, accuracy: 0.000001)
+    }
+
+    /// A second invitation while the ring is up (or still coming up) replays nothing and
+    /// keeps the same generation, so the centre and the running entrance are untouched.
+    func testSecondInvitationWhileShownReplaysNothing() {
+        var state = RingLaunchState()
+        XCTAssertEqual(state.opening(), .playEntrance(generation: 1))
+        XCTAssertEqual(state.opening(), .ignored)
+        XCTAssertEqual(state.entranceFinished(generation: 1), .settled)
+        XCTAssertEqual(state.phase, .shown)
+        XCTAssertEqual(state.opening(), .ignored)
+        XCTAssertEqual(state.generation, 1)
+    }
+
+    /// Input ends at once, so the ring may be asked to open again while it is still fading.
+    /// The old fade's completion must not touch the new round.
+    func testExitCompletionFromAnEarlierRoundCannotHideTheNewRing() {
+        var state = RingLaunchState()
+        XCTAssertEqual(state.opening(), .playEntrance(generation: 1))
+        XCTAssertEqual(state.closing(), .playExit(generation: 1))
+        XCTAssertEqual(state.phase, .exiting)
+
+        // A valid new invocation during the fade starts a new round.
+        XCTAssertEqual(state.opening(), .playEntrance(generation: 2))
+        XCTAssertEqual(state.phase, .entering)
+
+        XCTAssertEqual(state.exitFinished(generation: 1), .ignored)
+        XCTAssertEqual(state.phase, .entering, "旧淡出完成不能关掉新一轮")
+
+        XCTAssertEqual(state.entranceFinished(generation: 2), .settled)
+        XCTAssertEqual(state.phase, .shown)
+    }
+
+    /// Closing is idempotent: the first call owns the fade and later ones change nothing,
+    /// and the panel is ordered out exactly once, by the matching completion.
+    func testClosingIsIdempotentAndTheMatchingCompletionSettles() {
+        var state = RingLaunchState()
+        _ = state.opening()
+        _ = state.entranceFinished(generation: 1)
+        XCTAssertEqual(state.closing(), .playExit(generation: 1))
+        XCTAssertEqual(state.closing(), .ignored)
+        XCTAssertEqual(state.exitFinished(generation: 1), .settled)
+        XCTAssertEqual(state.phase, .hidden)
+        XCTAssertEqual(state.exitFinished(generation: 1), .ignored)
+        XCTAssertEqual(state.closing(), .ignored, "已隐藏时再取消不重复关闭")
+
+        // A later round still works after the panel really went away.
+        XCTAssertEqual(state.opening(), .playEntrance(generation: 2))
+    }
+
+    /// The entrance's completion is stale once the ring is on its way out: a start that
+    /// finishes late must not turn into a second entrance.
+    func testEntranceCompletionIsIgnoredOnceTheRingIsLeaving() {
+        var state = RingLaunchState()
+        _ = state.opening()
+        XCTAssertEqual(state.closing(), .playExit(generation: 1))
+        XCTAssertEqual(state.entranceFinished(generation: 1), .ignored)
+        XCTAssertEqual(state.phase, .exiting)
+    }
+
+    /// The panel centre a launch animation grows from is the final panel's centre; an
+    /// open near a screen edge is clamped first, so the scale never happens around a point
+    /// that then moves.
+    func testEntranceCentreIsTheFinalClampedPanelCentre() {
+        let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        let visible = CGRect(x: 0, y: 25, width: 1512, height: 950)
+        let mouse = CGPoint(x: 4, y: 30)
+        guard let ring = RingLayout.geometry(slotCount: 5, mouse: mouse, screens: [screen], visibleFrames: [visible]) else {
+            return XCTFail("布局失败")
+        }
+        XCTAssertEqual(ring.panelFrame.minX, visible.minX)
+        XCTAssertEqual(ring.panelFrame.minY, visible.minY)
+        // The icons and the hit frames of the first frame are this geometry's, unclamped by
+        // any animation: the hit test at an icon centre still names that slot.
+        let centre = CGPoint(x: ring.panelFrame.minX + ring.iconFrames[2].midX,
+                             y: ring.panelFrame.minY + ring.iconFrames[2].midY)
+        XCTAssertEqual(RingLayout.hitTest(ring, screenPoint: centre), .slot(2))
+    }
+}
+
+
+/// The ring's opening time as a configuration value: the default, the old file without the
+/// key, the boundaries, and the refusals — plus the timing it really produces.
+final class EntranceDurationConfigurationTests: XCTestCase {
+    private let accuracy: CGFloat = 0.0001
+
+    /// A file written before the setting existed keeps the timing the app had then, and a
+    /// file that names 275 ms keeps exactly 275.
+    func testOldFileFallsBackToTheShippedTimingAndAValidValueSurvivesARoundTrip() throws {
+        let old = """
+        {"version":1,"visibleSlotCount":5,"slots":[{"id":"0E4C0B44-3B39-4C56-9B0E-2A0D2C1E3F40"}]}
+        """.data(using: .utf8)!
+        let loadedOld = try LauncherConfiguration.decoded(from: old)
+        XCTAssertEqual(loadedOld.entranceDurationMilliseconds, 140)
+        XCTAssertEqual(loadedOld.visibleSlotCount, 5)
+
+        let configured = LauncherConfiguration(slots: LauncherConfiguration.empty().slots,
+                                              visibleSlotCount: 6,
+                                              entranceDurationMilliseconds: 275)
+        let reloaded = try LauncherConfiguration.decoded(from: try configured.encoded())
+        XCTAssertEqual(reloaded.entranceDurationMilliseconds, 275)
+        XCTAssertEqual(reloaded.visibleSlotCount, 6)
+        XCTAssertEqual(reloaded.slots.map(\.id), configured.slots.map(\.id))
+    }
+
+    /// 0 means "show it at once" and 2000 ms is the longest allowed; the value is stored as
+    /// the whole number the user typed, not rounded to a step.
+    func testZeroAndTheUpperBoundAreAcceptedAsTyped() throws {
+        for milliseconds in [0, 1, 275, 1999, 2000] {
+            let configuration = LauncherConfiguration(slots: LauncherConfiguration.empty().slots,
+                                                      entranceDurationMilliseconds: milliseconds)
+            let reloaded = try LauncherConfiguration.decoded(from: try configuration.encoded())
+            XCTAssertEqual(reloaded.entranceDurationMilliseconds, milliseconds)
+        }
+    }
+
+    /// A value outside the range, a wrong JSON type or a non-number name the error instead of
+    /// quietly becoming the default.
+    func testOutOfRangeAndWrongTypeAreRefused() throws {
+        for milliseconds in [-1, 2001, 60000] {
+            let invalid = LauncherConfiguration(slots: LauncherConfiguration.empty().slots,
+                                                entranceDurationMilliseconds: milliseconds)
+            XCTAssertThrowsError(try invalid.encoded()) { error in
+                XCTAssertEqual(error as? ConfigurationError,
+                               .invalidEntranceDuration(milliseconds))
+            }
+            let data = """
+            {"version":1,"visibleSlotCount":8,"entranceDurationMilliseconds":\(milliseconds),"slots":[]}
+            """.data(using: .utf8)!
+            XCTAssertThrowsError(try LauncherConfiguration.decoded(from: data))
+        }
+
+        for value in ["\"275\"", "27.5", "1e400", "true", "[275]"] {
+            let data = """
+            {"version":1,"visibleSlotCount":8,"entranceDurationMilliseconds":\(value),"slots":[]}
+            """.data(using: .utf8)!
+            XCTAssertThrowsError(try LauncherConfiguration.decoded(from: data), value)
+        }
+
+        // 1e3 是一个合法的 JSON 数值 1000，按 1000 毫秒读入，不算类型错误。
+        let exponent = """
+        {"version":1,"visibleSlotCount":8,"entranceDurationMilliseconds":1e3,"slots":[]}
+        """.data(using: .utf8)!
+        XCTAssertEqual(try LauncherConfiguration.decoded(from: exponent).entranceDurationMilliseconds, 1000)
+    }
+
+    /// The store writes and reads the field together with slots, ids and the hidden tail; a
+    /// reorder rebuilds the configuration without losing it.
+    func testStoreRoundTripAndReorderKeepTheDuration() throws {
+        let directory = testScratchDirectory().appendingPathComponent("entrance-\(UUID().uuidString)")
+        let store = SlotStore(directory: directory)
+        var slots = LauncherConfiguration.empty().slots
+        slots[0].app = AppReference(bundleIdentifier: nil, displayName: "A", path: "/Applications/A.app")
+        slots[6].app = AppReference(bundleIdentifier: nil, displayName: "G", path: "/Applications/G.app")
+        let saved = LauncherConfiguration(slots: slots, visibleSlotCount: 5, entranceDurationMilliseconds: 275)
+        try store.save(saved)
+
+        let reloaded = try SlotStore(directory: directory).load()
+        XCTAssertEqual(reloaded.entranceDurationMilliseconds, 275)
+        XCTAssertEqual(reloaded.visibleSlotCount, 5)
+        XCTAssertEqual(reloaded.slots.map(\.id), saved.slots.map(\.id))
+        XCTAssertEqual(reloaded.slots[6].app?.displayName, "G", "隐藏尾部的槽位不能被丢")
+
+        let moved = SlotReordering.moveApp(in: reloaded, from: 0, to: 1)
+        XCTAssertEqual(moved.entranceDurationMilliseconds, 275)
+        XCTAssertEqual(moved.slots[1].app?.displayName, "A")
+        XCTAssertEqual(moved.slots[6].app?.displayName, "G")
+    }
+
+    /// The parser is the field's whole boundary: only an unsigned whole number inside the
+    /// range survives it.
+    func testUserInputParsesOnlyWholeMillisecondsInsideTheRange() {
+        XCTAssertEqual(LauncherConfiguration.entranceMilliseconds(fromInput: "275"), 275)
+        XCTAssertEqual(LauncherConfiguration.entranceMilliseconds(fromInput: " 275 "), 275)
+        XCTAssertEqual(LauncherConfiguration.entranceMilliseconds(fromInput: "0075"), 75)
+        XCTAssertEqual(LauncherConfiguration.entranceMilliseconds(fromInput: "0"), 0)
+        XCTAssertEqual(LauncherConfiguration.entranceMilliseconds(fromInput: "2000"), 2000)
+
+        for refused in ["", "   ", "-5", "+5", "27.5", "2001", "99999", "1e3", "abc", "NaN", "Infinity", "1 4", "١٢٣"] {
+            XCTAssertNil(LauncherConfiguration.entranceMilliseconds(fromInput: refused), refused)
+        }
+    }
+
+    /// 275 ms is what the layer really plays: the same sweep, a quarter of the circle every
+    /// 68.75 ms, and the icons never part of it.
+    func testAConfiguredDurationSweepsAQuarterEveryQuarterOfTheTime() {
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 275, reduceMotion: false),
+                       0.275, accuracy: 0.000001)
+        let centre = CGPoint(x: 106, y: 106)
+        let threeOClock = CGPoint(x: 166, y: 106)
+        let sixOClock = CGPoint(x: 106, y: 46)
+
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(threeOClock, centre: centre,
+                                                        progress: RingLaunchAnimation.sweepProgress(at: 0.0687, milliseconds: 275)))
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(threeOClock, centre: centre,
+                                                       progress: RingLaunchAnimation.sweepProgress(at: 0.0688, milliseconds: 275)))
+        XCTAssertTrue(RingLaunchAnimation.sweepContains(sixOClock, centre: centre,
+                                                       progress: RingLaunchAnimation.sweepProgress(at: 0.1375, milliseconds: 275)))
+        XCTAssertFalse(RingLaunchAnimation.sweepContains(sixOClock, centre: centre,
+                                                        progress: RingLaunchAnimation.sweepProgress(at: 0.1374, milliseconds: 275)))
+    }
+
+    /// Reduce Motion wins for that run only: the saved value is not rewritten, so the timing
+    /// comes back when the preference is turned off again.
+    func testReduceMotionZeroesTheRunWithoutTouchingTheSavedValue() {
+        var configuration = LauncherConfiguration(slots: LauncherConfiguration.empty().slots,
+                                                  entranceDurationMilliseconds: 275)
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(
+            milliseconds: configuration.entranceDurationMilliseconds, reduceMotion: true), 0)
+        XCTAssertEqual(configuration.entranceDurationMilliseconds, 275, "用户保存值不能被改")
+
+        configuration = configuration.normalized()
+        XCTAssertEqual(configuration.entranceDurationMilliseconds, 275)
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(
+            milliseconds: configuration.entranceDurationMilliseconds, reduceMotion: false),
+                       0.275, accuracy: 0.000001)
+    }
+
+    /// 0 ms means the ring is complete in its first frame: no entrance time and no sector.
+    func testZeroMillisecondsMeansNoEntranceTime() {
+        XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 0, reduceMotion: false), 0)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 0), 0, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.001, milliseconds: 0), 1, accuracy: 1e-9)
+    }
+}

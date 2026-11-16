@@ -114,6 +114,10 @@ public enum SlotReordering {
         let moved = slots[source].app
         slots[source].app = slots[destination].app
         slots[destination].app = moved
-        return LauncherConfiguration(slots: slots, visibleSlotCount: normalized.visibleSlotCount)
+        // Every field of the configuration travels with a reorder, not only the slots: a
+        // rebuild here once dropped everything the initialiser did not name.
+        return LauncherConfiguration(slots: slots,
+                                     visibleSlotCount: normalized.visibleSlotCount,
+                                     entranceDurationMilliseconds: normalized.entranceDurationMilliseconds)
     }
 }

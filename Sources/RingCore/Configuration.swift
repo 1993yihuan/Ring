@@ -30,6 +30,7 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
     case invalidVisibleSlotCount(Int)
     case duplicateSlotID(UUID)
     case invalidReference(String)
+    case invalidEntranceDuration(Int)
     case decoding(String)
 
     public var description: String {
@@ -44,6 +45,8 @@ public enum ConfigurationError: Error, Equatable, CustomStringConvertible {
             return "槽位 ID 重复：\(id.uuidString)"
         case .invalidReference(let reason):
             return "应用引用无效：\(reason)"
+        case .invalidEntranceDuration(let milliseconds):
+            return "圆环展开时长 \(milliseconds) 毫秒超出 0…\(LauncherConfiguration.entranceDurationRange.upperBound)"
         case .decoding(let reason):
             return "配置无法解析：\(reason)"
         }
@@ -58,25 +61,47 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
     /// Older files have no visible count; eight is exactly the old behaviour.
     public static let defaultVisibleSlotCount = LauncherConfiguration.slotCapacity
     public static let visibleSlotRange = LauncherConfiguration.minimumVisibleSlotCount...LauncherConfiguration.slotCapacity
+    /// The ring's opening time in whole milliseconds; the default is the timing the ring
+    /// shipped with. 0 means it appears at once.
+    public static let defaultEntranceDurationMilliseconds = 140
+    public static let entranceDurationRange = 0...2000
 
     public var version: Int
     public var slots: [Slot]
     /// How many leading slots are shown and launchable. Lowering it hides slots; it never
     /// deletes them, so raising it again restores the same apps, ids and order.
     public var visibleSlotCount: Int
+    /// How long the ring takes to open, in whole milliseconds. 0 shows it at once.
+    public var entranceDurationMilliseconds: Int
 
     public init(version: Int = LauncherConfiguration.schemaVersion,
                 slots: [Slot],
-                visibleSlotCount: Int = LauncherConfiguration.defaultVisibleSlotCount) {
+                visibleSlotCount: Int = LauncherConfiguration.defaultVisibleSlotCount,
+                entranceDurationMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds) {
         self.version = version
         self.slots = slots
         self.visibleSlotCount = visibleSlotCount
+        self.entranceDurationMilliseconds = entranceDurationMilliseconds
     }
 
     public static func empty(capacity: Int = LauncherConfiguration.slotCapacity,
                              visibleSlotCount: Int? = nil) -> LauncherConfiguration {
         LauncherConfiguration(slots: (0..<capacity).map { _ in Slot() },
-                              visibleSlotCount: visibleSlotCount ?? capacity)
+                              visibleSlotCount: visibleSlotCount ?? capacity,
+                              entranceDurationMilliseconds: LauncherConfiguration.defaultEntranceDurationMilliseconds)
+    }
+
+    /// The milliseconds a user's text really means, or nil when it is not a whole number
+    /// inside the range. One parser for the field, the tests and the boundary: blank,
+    /// signed, fractional, exponent, non-ASCII digit and out-of-range input all yield nil,
+    /// so none of them can reach the file.
+    public static func entranceMilliseconds(fromInput text: String) -> Int? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed.allSatisfy({ $0.isASCII && $0.isNumber }),
+              let value = Int(trimmed),
+              entranceDurationRange.contains(value) else { return nil }
+        return value
     }
 
     /// The slots the ring, the settings list and the preview may use.
@@ -93,9 +118,13 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         }
         let visible = min(max(visibleSlotCount, LauncherConfiguration.visibleSlotRange.lowerBound),
                           LauncherConfiguration.visibleSlotRange.upperBound)
+        let entrance = min(max(entranceDurationMilliseconds,
+                               LauncherConfiguration.entranceDurationRange.lowerBound),
+                           LauncherConfiguration.entranceDurationRange.upperBound)
         return LauncherConfiguration(version: LauncherConfiguration.schemaVersion,
                                      slots: result,
-                                     visibleSlotCount: visible)
+                                     visibleSlotCount: visible,
+                                     entranceDurationMilliseconds: entrance)
     }
 
     public func validate() throws {
@@ -107,6 +136,9 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         }
         guard LauncherConfiguration.visibleSlotRange.contains(visibleSlotCount) else {
             throw ConfigurationError.invalidVisibleSlotCount(visibleSlotCount)
+        }
+        guard LauncherConfiguration.entranceDurationRange.contains(entranceDurationMilliseconds) else {
+            throw ConfigurationError.invalidEntranceDuration(entranceDurationMilliseconds)
         }
         var seen = Set<UUID>()
         for slot in slots {
@@ -124,6 +156,7 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         case version
         case slots
         case visibleSlotCount
+        case entranceDurationMilliseconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -132,6 +165,10 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         slots = try container.decode([Slot].self, forKey: .slots)
         visibleSlotCount = try container.decodeIfPresent(Int.self, forKey: .visibleSlotCount)
             ?? LauncherConfiguration.defaultVisibleSlotCount
+        // Files written before the ring could be configured have no such key: they keep the
+        // timing they were built with. A wrong type still fails to decode.
+        entranceDurationMilliseconds = try container.decodeIfPresent(Int.self, forKey: .entranceDurationMilliseconds)
+            ?? LauncherConfiguration.defaultEntranceDurationMilliseconds
     }
 
     public func encoded() throws -> Data {

@@ -26,8 +26,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var settingsModel: SettingsModel?
     private var statusItem: NSStatusItem?
     private var store: SlotStore?
+    /// The panel's own entrance and exit, with the generation that tells an old completion
+    /// from the round now on screen.
+    private var launch = RingLaunchState()
 
     private func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
+
+    /// Read on every use, so a preference changed while Ring runs applies to the next round
+    /// (and to the animation already on screen, via the workspace notification).
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -52,6 +61,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
         buildStatusItem()
         installMonitor()
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(accessibilityDisplayOptionsChanged),
+            name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+            object: nil)
     }
 
     /// Coming back from System Settings refreshes the state and retries the listener once
@@ -69,6 +83,29 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        NSWorkspace.shared.notificationCenter.removeObserver(self)
+    }
+
+    /// Reduce Motion switched on while the ring is moving: finish the current round now, so
+    /// no part of it keeps animating behind the new preference.
+    @objc private func accessibilityDisplayOptionsChanged() {
+        guard reduceMotion else { return }
+        // A highlight fade is the shortest one, but it must not survive the switch either.
+        materialView.finishHighlight()
+        let generation = launch.generation
+        switch launch.phase {
+        case .entering:
+            // Reduce Motion takes effect now: the ring is complete at once, with no sector
+            // mask left behind. Same guard as a natural completion.
+            settleEntrance(generation: generation, clearingReveal: true)
+        case .exiting:
+            guard let container = panelContainer.layer else { return }
+            materialView.playExit(in: container, duration: 0) { [weak self] in
+                self?.exitSettled(generation: generation)
+            }
+        case .hidden, .shown:
+            break
+        }
     }
 
     // MARK: - Trigger wiring
@@ -210,8 +247,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
         panel.setFrame(geometry.panelFrame, display: true)
         if panel.contentView !== panelContainer {
-            // The material is its own view: the website's band and its hairlines, all
-            // clipped to a ring so the middle and the outside are genuinely clear.
+            // One layer-backed container holds both views, so leaving can fade the whole
+            // picture at once. The material is its own view: the website's band and its
+            // hairlines, all clipped to a ring so the middle and the outside are clear.
+            panelContainer.wantsLayer = true
             panelContainer.addSubview(materialView)
             view.autoresizingMask = [.width, .height]
             panelContainer.addSubview(view)
@@ -220,16 +259,99 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         panelContainer.frame = NSRect(origin: .zero, size: geometry.panelFrame.size)
         materialView.frame = panelContainer.bounds
         view.frame = panelContainer.bounds
-        // The ring is complete before the window is ordered front: this one entry point
-        // serves the Option gesture, the menu item, a quick reopen and Reduce Motion
-        // alike. There is no launch animation left to enable or skip.
+        // This one entry point serves the Option gesture, the menu item and a quick reopen
+        // alike. The icons are complete before the window is ordered front; the plate starts
+        // at the entrance's first frame, and only the plate itself then moves.
         materialView.selectedSlot = nil
         materialView.prepare(geometry: geometry)
         view.present(geometry: geometry,
                      items: items,
                      mode: inputMode,
                      decision: nil)
+        let opening = launch.opening()
+        if case .playEntrance(let generation) = opening {
+            if let container = panelContainer.layer { materialView.resetPanel(in: container) }
+            // A mask from an earlier round is not inherited: every opening states its own.
+            materialView.clearSweep()
+            view.clearSweep()
+            // The masks are in place before the panel is ordered front, so the first frame the
+            // user can see is already the first frame of the sweep — never the whole ring.
+            beginEntrance(generation: generation)
+        }
+        panel.ignoresMouseEvents = false
         panel.orderFrontRegardless()
+    }
+
+    /// One reveal across both views: the material and the icons are uncovered by the same
+    /// sector, while the centre copy on RingView's own layer is never masked. The duration is
+    /// read from the configuration at every open, so a saved value applies to the next ring
+    /// and never re-times one already opening.
+    private func beginEntrance(generation: Int) {
+        guard let view = ringView, let geometry = view.geometry else {
+            settleEntrance(generation: generation, clearingReveal: false)
+            return
+        }
+        let duration = RingLaunchAnimation.entranceDuration(
+            milliseconds: session.config.entranceDurationMilliseconds,
+            reduceMotion: reduceMotion)
+        // The icons go first: with no duration the material's completion runs synchronously
+        // and clears both masks, so both must already be in place.
+        view.beginSweep(geometry: geometry, duration: duration)
+        materialView.beginSweep(duration: duration) { [weak self] in
+            self?.finishEntrance(generation: generation)
+        }
+    }
+
+    /// The completed frame is the original drawing: both masks are removed rather than left at
+    /// full, so the ring carries no seam at 12 o'clock afterwards — but only for a completion the
+    /// state machine still accepts.
+    private func finishEntrance(generation: Int) {
+        settleEntrance(generation: generation, clearingReveal: true)
+    }
+
+    // MARK: - Entrance and exit
+
+    /// Only the round that asked for this entrance may settle it, and only that round may take
+    /// the reveal masks away. An interrupted entrance has already frozen its sector: its
+    /// completion arrives after `closing()`, is refused here, and the fade that follows keeps
+    /// exactly the part of the ring the user had seen.
+    @discardableResult
+    private func settleEntrance(generation: Int, clearingReveal: Bool) -> Bool {
+        guard launch.entranceFinished(generation: generation) == .settled else { return false }
+        if clearingReveal {
+            materialView.clearSweep()
+            ringView?.clearSweep()
+        }
+        return true
+    }
+
+    /// Input ends before this returns. What is left is one fade, owned here, so no caller
+    /// has to add its own delay to hide the panel.
+    private func beginExit() {
+        switch launch.closing() {
+        case .ignored:
+            // Nothing is fading: an already hidden panel has nothing to take off screen
+            // again, and a running fade owns the panel until its own completion.
+            if launch.phase == .hidden { panel.orderOut(nil) }
+        case .playExit(let generation):
+            // A fading plate must not swallow a click meant for what is underneath.
+            panel.ignoresMouseEvents = true
+            // The icons are frozen at the same sector as the material, so the whole picture
+            // keeps exactly the part it had uncovered while it fades.
+            ringView?.freezeSweep()
+            guard let container = panelContainer.layer else { return }
+            materialView.playExit(in: container,
+                                  duration: RingLaunchAnimation.exitDuration(reduceMotion: reduceMotion)) { [weak self] in
+                self?.exitSettled(generation: generation)
+            }
+        }
+    }
+
+    /// A fade from an earlier round is ignored here, so it can never hide the ring that
+    /// took its place.
+    private func exitSettled(generation: Int) {
+        guard launch.exitFinished(generation: generation) == .settled else { return }
+        panel.orderOut(nil)
     }
 
     // MARK: - Screen-wide selection
@@ -295,7 +417,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         keepingOverlayForRelease = true
         session.cancel()
         monitor.forwardsPointerMoves = false
-        panel.orderOut(nil)
+        beginExit()
         show(decision: nil)
         activeScreenFrame = nil
         recognizer.reset()
@@ -392,8 +514,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     private func hidePanel() {
-        panel.orderOut(nil)
+        // The overlay goes at once so no click is caught; the plate fades out on its own.
         overlay.orderOut(nil)
+        beginExit()
         show(decision: nil)
         activeScreenFrame = nil
         keepingOverlayForRelease = false

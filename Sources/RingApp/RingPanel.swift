@@ -170,6 +170,40 @@ final class RingView: NSView {
         needsDisplay = true
     }
 
+    // MARK: - Entrance reveal
+
+    /// The icons are uncovered by the same sector as the material. Only `iconHost` is masked:
+    /// the centre copy is drawn on this view's own layer, so masking the host leaves the name
+    /// whole while every icon and empty well is cut by the sweeping edge.
+    func beginSweep(geometry: RingGeometry, duration: TimeInterval) {
+        clearSweep()
+        let plate = geometry.plateRect
+        let mask = RingSweepReveal.mask(centre: CGPoint(x: plate.midX, y: plate.midY),
+                                        radius: hypot(bounds.width, bounds.height),
+                                        frame: bounds,
+                                        scale: window?.backingScaleFactor ?? 2)
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        iconHost.mask = mask
+        CATransaction.commit()
+        RingSweepReveal.animate(mask, duration: duration) {}
+    }
+
+    /// The finished picture carries no reveal mask at all: what is left is the original
+    /// drawing, with no seam where the sweep started.
+    func clearSweep() {
+        guard iconHost.mask != nil else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        iconHost.mask = nil
+        CATransaction.commit()
+    }
+
+    /// Keeps the sector the frame shows when an entrance is interrupted.
+    func freezeSweep() {
+        RingSweepReveal.freeze(iconHost.mask)
+    }
+
     // MARK: - Drawn centre
 
     override func draw(_ dirtyRect: NSRect) {
