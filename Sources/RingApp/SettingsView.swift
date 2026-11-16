@@ -61,7 +61,6 @@ struct SettingsView: View {
                     .frame(maxHeight: .infinity)
             }
             .frame(maxHeight: .infinity)
-            InputPermissionCard(model: model)
             SettingsFooterView(model: model)
         }
         .padding(Layout.windowPadding)
@@ -372,7 +371,9 @@ private struct SlotRow: View {
 
 // MARK: - Permission card
 
-private struct InputPermissionCard: View {
+/// The input-monitoring card. It used to sit at the bottom of the ring page; it now lives on the
+/// permissions page, unchanged, so both places would show the same state if it ever moved again.
+struct InputPermissionCard: View {
     @ObservedObject var model: SettingsModel
 
     private var granted: Bool { model.status.access == .granted }

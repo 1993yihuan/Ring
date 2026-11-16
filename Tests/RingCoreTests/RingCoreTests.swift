@@ -2591,3 +2591,167 @@ final class SettingsSectionTests: XCTestCase {
         XCTAssertEqual(SettingsSection.ring.title, "环形设置")
     }
 }
+
+/// Versions, release filtering and the checks a downloaded bundle has to pass. All pure: the
+/// network, the disk image and the shell are outside this file.
+final class UpdatePolicyTests: XCTestCase {
+    private func release(_ tag: String,
+                         draft: Bool = false,
+                         prerelease: Bool = false,
+                         assets: [(String, String?)]? = nil) -> ReleaseInfo {
+        let defaultDigest = "sha256:" + String(repeating: "a", count: 64)
+        let resolved = assets ?? [("Ring-\(tag)-apple-silicon.dmg", defaultDigest)]
+        return ReleaseInfo(tagName: tag,
+                           name: "Ring \(tag)",
+                           body: "说明 \(tag)",
+                           draft: draft,
+                           prerelease: prerelease,
+                           assets: resolved.map { name, digest in
+                               ReleaseAssetInfo(name: name, size: 1024, digest: digest,
+                                                browserDownloadURL: "https://example.com/\(name)")
+                           })
+    }
+
+    func testVersionsParseAndOrderAsNumbers() {
+        XCTAssertEqual(SemanticVersion(string: "0.1.7")?.description, "0.1.7")
+        XCTAssertEqual(SemanticVersion(string: "v0.1.7")?.description, "0.1.7")
+        XCTAssertEqual(SemanticVersion(string: "1.2")?.description, "1.2.0")
+        for refused in ["", "v", "abc", "0.1.7-beta", "1.2.3.4", "１.２.３", "-1.2.3"] {
+            XCTAssertNil(SemanticVersion(string: refused), refused)
+        }
+        XCTAssertTrue(SemanticVersion(major: 0, minor: 1, patch: 6) < SemanticVersion(major: 0, minor: 1, patch: 7))
+        XCTAssertTrue(SemanticVersion(major: 0, minor: 9, patch: 9) < SemanticVersion(major: 1, minor: 0, patch: 0))
+        XCTAssertTrue(SemanticVersion(major: 1, minor: 0, patch: 0) < SemanticVersion(major: 1, minor: 0, patch: 1))
+    }
+
+    func testDraftsAndPrereleasesAreNeverOffered() {
+        let releases = [release("v0.2.0", draft: true), release("v0.3.0", prerelease: true), release("v0.1.7")]
+        let outcome = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                          releases: releases, architecture: .arm64)
+        guard case .success(.available(let candidate)) = outcome else {
+            return XCTFail("应当选中 0.1.7：\(outcome)")
+        }
+        XCTAssertEqual(candidate.version, SemanticVersion(major: 0, minor: 1, patch: 7))
+        XCTAssertEqual(candidate.notes, "说明 v0.1.7")
+    }
+
+    func testTheHighestPublishedVersionWins() {
+        let releases = [release("v0.1.7"), release("v0.1.10"), release("v0.1.9")]
+        let outcome = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                          releases: releases, architecture: .arm64)
+        guard case .success(.available(let candidate)) = outcome else { return XCTFail("\(outcome)") }
+        XCTAssertEqual(candidate.version.description, "0.1.10", "10 比 9 大，不能按字符串比较")
+    }
+
+    func testNothingNewerMeansUpToDateAndNeverADowngrade() {
+        let releases = [release("v0.1.7"), release("v0.1.6")]
+        for current in ["0.1.7", "0.2.0"] {
+            let outcome = UpdatePolicy.select(current: SemanticVersion(string: current)!,
+                                              releases: releases, architecture: .arm64)
+            guard case .success(.upToDate(let version)) = outcome else {
+                return XCTFail("\(current) 不应被降级：\(outcome)")
+            }
+            XCTAssertEqual(version.description, current)
+        }
+    }
+
+    func testTheAssetMatchesTheArchitectureTheProcessRunsAs() {
+        let assets = [("Ring-0.1.7-apple-silicon.dmg", "sha256:" + String(repeating: "b", count: 64)),
+                      ("Ring-0.1.7-intel.dmg", "sha256:" + String(repeating: "c", count: 64))]
+        let releases = [release("v0.1.7", assets: assets)]
+
+        guard case .success(.available(let arm)) = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                                                      releases: releases, architecture: .arm64) else {
+            return XCTFail("arm64 应当选中 apple-silicon")
+        }
+        XCTAssertEqual(arm.asset.name, "Ring-0.1.7-apple-silicon.dmg")
+
+        guard case .success(.available(let intel)) = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                                                        releases: releases, architecture: .x86_64) else {
+            return XCTFail("x86_64 应当选中 intel")
+        }
+        XCTAssertEqual(intel.asset.name, "Ring-0.1.7-intel.dmg")
+    }
+
+    func testAReleaseWithoutThisArchitectureIsRefusedWithWords() {
+        let releases = [release("v0.1.7", assets: [("Ring-0.1.7-intel.dmg", "sha256:" + String(repeating: "c", count: 64))])]
+        guard case .failure(let failure) = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                                               releases: releases, architecture: .arm64) else {
+            return XCTFail("应当拒绝")
+        }
+        XCTAssertEqual(failure, .noAssetForArchitecture("v0.1.7"))
+        XCTAssertTrue(failure.description.contains("没有适合这台 Mac"))
+    }
+
+    func testAnAssetWithoutADigestIsNotOffered() {
+        let releases = [release("v0.1.7", assets: [("Ring-0.1.7-apple-silicon.dmg", nil)])]
+        guard case .failure(let failure) = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                                               releases: releases, architecture: .arm64) else {
+            return XCTFail("没有摘要就不能提供更新")
+        }
+        XCTAssertEqual(failure, .missingDigest("v0.1.7"))
+    }
+
+    func testOnlySha256DigestsAreAccepted() {
+        let good = "sha256:" + String(repeating: "ab", count: 32)
+        XCTAssertEqual(UpdatePolicy.normalizedDigest(good), good)
+        XCTAssertEqual(UpdatePolicy.expectedDigestHex(good), String(repeating: "ab", count: 32))
+        for refused in [nil, "", "md5:abcd", "sha256:abc", "sha256:" + String(repeating: "z", count: 64)] {
+            XCTAssertNil(UpdatePolicy.normalizedDigest(refused), refused ?? "nil")
+        }
+    }
+
+    func testAnEmptyReleaseListSaysSo() {
+        guard case .failure(let failure) = UpdatePolicy.select(current: SemanticVersion(major: 0, minor: 1, patch: 6),
+                                                               releases: [], architecture: .arm64) else {
+            return XCTFail("空列表应当失败")
+        }
+        XCTAssertEqual(failure, .noPublishedRelease)
+    }
+
+    // MARK: 下载包的检查
+
+    private func facts(identifier: String = UpdatePolicy.expectedBundleIdentifier,
+                       version: String = "0.1.7",
+                       minimum: String = "13.0",
+                       architectures: [String] = ["arm64"],
+                       executable: Bool = true,
+                       license: Bool = true,
+                       signature: Bool = true) -> PackageFacts {
+        PackageFacts(bundleIdentifier: identifier, shortVersion: version, minimumSystemVersion: minimum,
+                     architectures: architectures, hasMainExecutable: executable, hasLicense: license,
+                     signatureValid: signature)
+    }
+
+    func testAGoodBundlePassesEveryCheck() {
+        let problems = PackageValidation.problems(in: facts(),
+                                                  expectedVersion: SemanticVersion(string: "0.1.7")!,
+                                                  architecture: .arm64,
+                                                  macOS: (14, 5))
+        XCTAssertEqual(problems, [])
+    }
+
+    func testEachBrokenPromiseIsNamed() {
+        let expected = SemanticVersion(string: "0.1.7")!
+        func problems(_ facts: PackageFacts) -> [String] {
+            PackageValidation.problems(in: facts, expectedVersion: expected, architecture: .arm64, macOS: (14, 5))
+        }
+        XCTAssertTrue(problems(facts(identifier: "com.example.other")).contains { $0.contains("包标识") })
+        XCTAssertTrue(problems(facts(version: "0.1.6")).contains { $0.contains("不一致") })
+        XCTAssertTrue(problems(facts(architectures: ["x86_64"])).contains { $0.contains("架构") })
+        XCTAssertTrue(problems(facts(minimum: "15.0")).contains { $0.contains("要求 macOS") })
+        XCTAssertTrue(problems(facts(executable: false)).contains { $0.contains("主可执行") })
+        XCTAssertTrue(facts(license: false).hasLicense == false)
+        XCTAssertTrue(problems(facts(license: false)).contains { $0.contains("LICENSE") })
+        XCTAssertTrue(problems(facts(signature: false)).contains { $0.contains("签名") })
+        XCTAssertTrue(problems(facts(version: "abc")).contains { $0.contains("版本号无法识别") })
+    }
+
+    func testAMacOSNewEnoughForThePackageIsAccepted() {
+        let problems = PackageValidation.problems(in: facts(minimum: "13.0"),
+                                                  expectedVersion: SemanticVersion(string: "0.1.7")!,
+                                                  architecture: .arm64,
+                                                  macOS: (13, 0))
+        XCTAssertEqual(problems, [])
+    }
+}
