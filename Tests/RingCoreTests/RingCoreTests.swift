@@ -2755,3 +2755,215 @@ final class UpdatePolicyTests: XCTestCase {
         XCTAssertEqual(problems, [])
     }
 }
+
+// MARK: - Local signing policy
+
+final class LocalSigningPolicyTests: XCTestCase {
+    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+
+    func testACompletePolicyIsAcceptedAndNormalised() {
+        let policy = LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: sha256)
+        XCTAssertEqual(policy?.identitySHA1, sha1.lowercased())
+        XCTAssertEqual(policy?.certificateSHA256, sha256.lowercased())
+    }
+
+    func testAMissingOrMalformedPolicyIsNotPartiallyTrusted() {
+        XCTAssertNil(LocalSigningPolicy(identitySHA1: nil, certificateSHA256: sha256))
+        XCTAssertNil(LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: nil))
+        XCTAssertNil(LocalSigningPolicy(identitySHA1: "1234", certificateSHA256: sha256))
+        XCTAssertNil(LocalSigningPolicy(identitySHA1: String(repeating: "z", count: 40), certificateSHA256: sha256))
+        XCTAssertNil(LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: String(repeating: "0", count: 63)))
+    }
+
+    func testThePolicyIsReadFromTheBundleInfoDictionary() {
+        let info: [String: Any] = [
+            LocalSigningPolicy.identityKey: sha1,
+            LocalSigningPolicy.certificateKey: sha256
+        ]
+        XCTAssertEqual(LocalSigningPolicy(info: info)?.identitySHA1, sha1.lowercased())
+        XCTAssertNil(LocalSigningPolicy(info: [:]))
+        XCTAssertNil(LocalSigningPolicy(info: nil))
+    }
+
+    func testTheLeafRequirementPinsTheCertificate() {
+        let policy = LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: sha256)
+        XCTAssertEqual(policy?.leafRequirement, "certificate leaf = H\"\(sha1.lowercased())\"")
+    }
+}
+
+final class LocalSigningGateTests: XCTestCase {
+    private let policy = LocalSigningPolicy(identitySHA1: "0123456789ABCDEF0123456789ABCDEF01234567",
+                                            certificateSHA256: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF")!
+
+    func testNoPolicyAnywhereKeepsThePublicAdhocPath() {
+        XCTAssertEqual(LocalSigningGate.decide(target: .none, incoming: .none), .publicUpdate)
+    }
+
+    func testAnAdhocInstallNeverGetsALocallySignedPackageSilently() {
+        XCTAssertEqual(LocalSigningGate.decide(target: .none, incoming: .valid(policy)), .bootstrapRequired)
+    }
+
+    func testTheInstalledAppDecidesAndThePackageCannotOverrideIt() {
+        let other = LocalSigningPolicy(identitySHA1: String(repeating: "a", count: 40),
+                                       certificateSHA256: String(repeating: "b", count: 64))!
+        XCTAssertEqual(LocalSigningGate.decide(target: .valid(policy), incoming: .valid(other)), .localResign(policy))
+        XCTAssertEqual(LocalSigningGate.decide(target: .valid(policy), incoming: .none), .localResign(policy))
+    }
+
+    func testCdhashRequirementsAreRecognisedAsAdhoc() {
+        XCTAssertTrue(LocalSigningGate.isCdhashRequirement("identifier \"com.jusda.ring.demo\" and cdhash H\"abc\""))
+        XCTAssertTrue(LocalSigningGate.isCdhashRequirement("CDHASH H\"abc\""))
+        XCTAssertFalse(LocalSigningGate.isCdhashRequirement(policy.leafRequirement))
+    }
+
+    func testMutualCompatibilityOutcomes() {
+        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: true, newSatisfiedByOld: true,
+                                                      oldRequirement: policy.leafRequirement), .compatible)
+        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: false, newSatisfiedByOld: false,
+                                                      oldRequirement: "identifier \"x\" and cdhash H\"00\""), .migrationRequired)
+        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: false, newSatisfiedByOld: true,
+                                                      oldRequirement: policy.leafRequirement), .incompatible)
+    }
+}
+
+// MARK: - Controlled child processes
+
+final class ControlledProcessTests: XCTestCase {
+    func testAQuickCommandReturnsItsOutput() {
+        switch ControlledProcess.run(executable: "/bin/echo", arguments: ["hello"], timeout: 5) {
+        case .success(let outcome):
+            XCTAssertEqual(outcome.status, 0)
+            XCTAssertEqual(outcome.output, "hello")
+        case .failure(let error):
+            XCTFail("echo should succeed: \(error)")
+        }
+    }
+
+    func testATimeoutTerminatesTheChildAndLeavesNoOrphan() {
+        let started = Date()
+        switch ControlledProcess.run(executable: "/bin/sleep", arguments: ["7.3"], timeout: 0.3) {
+        case .success:
+            XCTFail("sleep 7.3 must not succeed under a 0.3s deadline")
+        case .failure(let error):
+            guard case .timedOut = error else {
+                return XCTFail("expected a timeout, got \(error)")
+            }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 4)
+        let leftover = Process()
+        leftover.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        leftover.arguments = ["-f", "sleep 7.3"]
+        let pipe = Pipe()
+        leftover.standardOutput = pipe
+        try? leftover.run()
+        leftover.waitUntilExit()
+        let matches = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        XCTAssertEqual(matches.trimmingCharacters(in: .whitespacesAndNewlines), "")
+    }
+
+    func testCancellationStopsTheChild() {
+        let started = Date()
+        switch ControlledProcess.run(executable: "/bin/sleep", arguments: ["7.4"], timeout: 30,
+                                     cancellation: { true }) {
+        case .success:
+            XCTFail("a cancelled run must not succeed")
+        case .failure(let error):
+            guard case .cancelled = error else {
+                return XCTFail("expected cancellation, got \(error)")
+            }
+        }
+        XCTAssertLessThan(Date().timeIntervalSince(started), 4)
+    }
+}
+
+// MARK: - Local signing policy states (malformed is never the public path)
+
+final class LocalSigningPolicyStateTests: XCTestCase {
+    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+
+    func testNoKeysMeansNoPolicy() {
+        XCTAssertEqual(LocalSigningPolicyState.state(info: nil), .none)
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [:]), .none)
+    }
+
+    func testPresentButMalformedKeysAreInvalidNotAbsent() {
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: "1234",
+                                                            LocalSigningPolicy.certificateKey: sha256]),
+                       .invalid("身份或证书键不是合法指纹（需要 40/64 位十六进制）"))
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
+                                                            LocalSigningPolicy.certificateKey: "zzzz"]),
+                       .invalid("身份或证书键不是合法指纹（需要 40/64 位十六进制）"))
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1]),
+                       .invalid("两个策略键必须同时存在"))
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.certificateKey: sha256]),
+                       .invalid("两个策略键必须同时存在"))
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: 42,
+                                                            LocalSigningPolicy.certificateKey: sha256]),
+                       .invalid("身份键的类型不是字符串"))
+        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
+                                                            LocalSigningPolicy.certificateKey: [1, 2]]),
+                       .invalid("证书键的类型不是字符串"))
+    }
+
+    func testTheInvalidStateIsCarriedIntoTheDecisionSoNothingFallsBackToAdhoc() {
+        let broken = LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: "1234",
+                                                          LocalSigningPolicy.certificateKey: sha256])
+        guard case .invalidPolicy(let reason) = LocalSigningGate.decide(target: broken, incoming: .none) else {
+            return XCTFail("a broken installed policy must refuse, not update")
+        }
+        XCTAssertTrue(reason.contains("已安装的 Ring"))
+        guard case .invalidPolicy = LocalSigningGate.decide(target: .none, incoming: broken) else {
+            return XCTFail("a broken package policy must refuse")
+        }
+    }
+
+    func testAValidPolicyStillResigns() {
+        let good = LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
+                                                        LocalSigningPolicy.certificateKey: sha256])
+        guard case .localResign(let policy) = LocalSigningGate.decide(target: good, incoming: .none) else {
+            return XCTFail("a valid installed policy must resign")
+        }
+        XCTAssertEqual(policy.identitySHA1, sha1.lowercased())
+    }
+}
+
+final class DesignatedRequirementTests: XCTestCase {
+    func testAPlainRequirementLineIsRead() {
+        let output = "Executable=/tmp/Ring.app/Contents/MacOS/Ring\ndesignated => identifier \"com.jusda.ring.demo\" and certificate leaf = H\"1377\""
+        XCTAssertEqual(DesignatedRequirement.expression(from: output),
+                       "identifier \"com.jusda.ring.demo\" and certificate leaf = H\"1377\"")
+    }
+
+    func testTheAdhocCommentMarkerIsAccepted() {
+        let output = "Executable=/tmp/Ring.app/Contents/MacOS/Ring\n# designated => cdhash H\"9c0aeff4\""
+        XCTAssertEqual(DesignatedRequirement.expression(from: output), "cdhash H\"9c0aeff4\"")
+        XCTAssertTrue(LocalSigningGate.isCdhashRequirement(DesignatedRequirement.expression(from: output)!))
+    }
+
+    func testOutputWithoutARequirementIsRejected() {
+        XCTAssertNil(DesignatedRequirement.expression(from: "Executable=/tmp/Ring.app"))
+        XCTAssertNil(DesignatedRequirement.expression(from: "designated =>   "))
+    }
+}
+
+final class ListenStartOutcomeTests: XCTestCase {
+    func testPermissionAndLifecycleFailuresStayApart() {
+        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: false, tapCreated: false, tapEnabled: false),
+                       .permissionMissing)
+        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: false, tapEnabled: false),
+                       .tapUnavailable)
+        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: true, tapEnabled: true),
+                       .running(enabled: true))
+        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: true, tapEnabled: false),
+                       .running(enabled: false))
+    }
+
+    func testDiagnosticLinesCarryStatesOnly() {
+        let line = ListenStartOutcome.running(enabled: true).description
+        XCTAssertEqual(line, "outcome=running preflight=true tapCreated=true tapEnabled=true")
+        XCTAssertFalse(line.contains("key"))
+        XCTAssertFalse(line.contains("char"))
+    }
+}

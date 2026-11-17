@@ -10,6 +10,9 @@ final class GlobalOptionMonitor {
         case stopped
         case running
         case needsPermission
+        /// Authorised, but the tap itself could not be created: a lifecycle problem, not a
+        /// permission one.
+        case tapUnavailable
         case tapDisabled
     }
 
@@ -35,6 +38,9 @@ final class GlobalOptionMonitor {
     var forwardsPointerMoves = false
     var onTick: ((TimeInterval) -> Void)?
     var onHealthChange: ((Health) -> Void)?
+    /// One line per changed start outcome. States only; no key codes, characters or text.
+    var diagnosticFile: URL?
+    private var lastRecordedOutcome: ListenStartOutcome?
 
     var isRunning: Bool { tap != nil && health == .running }
 
@@ -44,6 +50,7 @@ final class GlobalOptionMonitor {
         stop()
         guard CGPreflightListenEventAccess() else {
             update(.needsPermission)
+            record(.permissionMissing)
             return false
         }
 
@@ -67,7 +74,8 @@ final class GlobalOptionMonitor {
                                               eventsOfInterest: mask,
                                               callback: callback,
                                               userInfo: Unmanaged.passUnretained(self).toOpaque()) else {
-            update(.needsPermission)
+            update(.tapUnavailable)
+            record(.tapUnavailable)
             return false
         }
 
@@ -78,6 +86,8 @@ final class GlobalOptionMonitor {
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
         CGEvent.tapEnable(tap: created, enable: true)
         update(.running)
+        record(.classify(preflightGranted: true, tapCreated: true,
+                         tapEnabled: CGEvent.tapIsEnabled(tap: created)))
         startTicking()
         return true
     }
@@ -105,6 +115,23 @@ final class GlobalOptionMonitor {
         }
         RunLoop.main.add(timer, forMode: .common)
         tickTimer = timer
+    }
+
+    private func record(_ outcome: ListenStartOutcome) {
+        guard outcome != lastRecordedOutcome else { return }
+        lastRecordedOutcome = outcome
+        guard let diagnosticFile else { return }
+        let stamp = ISO8601DateFormatter().string(from: Date())
+        let line = stamp + " listen " + outcome.description + "\n"
+        let directory = diagnosticFile.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let handle = try? FileHandle(forWritingTo: diagnosticFile) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try? Data(line.utf8).write(to: diagnosticFile)
+        }
     }
 
     private func update(_ newHealth: Health) {

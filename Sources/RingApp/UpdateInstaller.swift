@@ -295,6 +295,40 @@ enum UpdateInstaller {
             return .failure(.installFailed("暂存的新版本签名自检没有通过：\(verify.output)"))
         }
 
+        // A locally signed build states its identity policy in its own Info.plist. The
+        // installed app decides what this Mac accepts; the package's keys are only used to
+        // notice that installing it would change the identity behind the user's permission.
+        let targetPolicy = LocalSigningPolicyState.state(info: Bundle(path: target.path)?.infoDictionary)
+        let incomingPolicy = LocalSigningPolicyState.state(info: Bundle(path: prepared.app.path)?.infoDictionary)
+        switch LocalSigningGate.decide(target: targetPolicy, incoming: incomingPolicy) {
+        case .publicUpdate:
+            break
+        case .invalidPolicy(let reason):
+            discardStage()
+            return .failure(.installFailed(reason))
+        case .bootstrapRequired:
+            discardStage()
+            return .failure(.migrationRequired("已安装的 Ring 不是本机身份签名，新包是；这会改变隐私授权身份，更新器不会自动替换。"))
+        case .localResign(let policy):
+            // The installed app is checked first: the private key is only touched once the
+            // target really is a locally signed bundle that matches its own stated policy.
+            if case .failure(let failure) = LocalResign.verifyInstalledTarget(target, policy: policy, scratch: stage) {
+                discardStage()
+                return .failure(failure)
+            }
+            if case .failure(let failure) = LocalResign.resign(stagedApp, policy: policy, scratch: stage) {
+                discardStage()
+                return .failure(failure)
+            }
+            switch LocalResign.requireMutualCompatibility(target: target, staged: stagedApp) {
+            case .failure(let failure):
+                discardStage()
+                return .failure(failure)
+            case .success:
+                break
+            }
+        }
+
         let previousVersion = Bundle(path: target.path)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "old"
         let backupName = "\(target.lastPathComponent).pre-\(previousVersion)"
         var backup = parent.appendingPathComponent(backupName, isDirectory: true)

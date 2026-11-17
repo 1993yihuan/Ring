@@ -105,3 +105,19 @@ Ring 的槽位配置存在个人文件夹的 `Library/Application Support/Ring` 
 - 源码：https://github.com/1993yihuan/Ring
 - 全部版本：https://github.com/1993yihuan/Ring/releases
 - 许可证：[MIT](LICENSE)；第三方资源的归属见 [THIRD_PARTY.md](THIRD_PARTY.md)
+
+## 本机签名（可选，只对自己这台 Mac）
+
+公开构建与发布包保持 ad-hoc 签名，不需要任何证书。**只有显式设置下面两个变量时**才启用本机模式，公开默认仍是 ad-hoc。如果希望在这台 Mac 上可能不必每次重新勾选「输入监控」，可以让本地构建改用一张本机自签名证书：
+
+```sh
+RING_LOCAL_SIGNING_IDENTITY=<证书 SHA-1，40 位十六进制> \
+RING_LOCAL_SIGNING_CERT_SHA256=<证书 SHA-256> \
+scripts/build.sh
+```
+
+- 只有这次生成的 `Ring.app` 会写入 `RingLocalSigningIdentitySHA1` 与 `RingLocalSigningCertificateSHA256` 两个键；`Packaging/Info.plist`、`scripts/package-dmg.sh` 与发布流程都保持原样。
+- 更新器先校验原始下载摘要与包内容，再对**同卷暂存副本**用本机身份重签，并用 `codesign` 实际求值新旧 DR 是否双向兼容，通过后才替换；不兼容就停下，不会悄悄退回 adhoc。已安装的是 ad-hoc 版本时不会自动替换（需要一次性手动迁移）。
+- 从 ad-hoc 换成本机证书的那一次，系统**可能**要求重新授权一次输入监控；之后同一身份的不同版本之间才可能沿用。目前真实 Ring 只验证了初次迁移、以及用户重新授权后 Option 恢复，完整升级流程仍待实测；**不宣称所有公开用户都不再需要授权**。
+- 私钥只留在本机登录钥匙串，不导出、不进仓库。换机器或重建证书后**可能**需要重新授权。
+

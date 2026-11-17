@@ -33,6 +33,26 @@ SPM_PATHS=(--cache-path "$BUILD/swiftpm-cache"
 
 ARCHS="${RING_ARCHS:-x86_64 arm64}"
 
+# Optional local signing input, validated before any compile work so a bad value fails fast.
+LOCAL_IDENTITY="${RING_LOCAL_SIGNING_IDENTITY:-}"
+LOCAL_CERT_SHA256="${RING_LOCAL_SIGNING_CERT_SHA256:-}"
+if [ -n "$LOCAL_IDENTITY" ]; then
+    if [ -z "$LOCAL_CERT_SHA256" ]; then
+        echo "本机签名需要同时给出 RING_LOCAL_SIGNING_IDENTITY 与 RING_LOCAL_SIGNING_CERT_SHA256" >&2
+        exit 1
+    fi
+    # A hex-looking identity must be a full SHA-1; a name is left to codesign, which fails
+    # with its own message. A bad certificate value must never reach the bundle.
+    if printf '%s' "$LOCAL_IDENTITY" | grep -Eq '^[0-9A-Fa-f]+$' && [ "${#LOCAL_IDENTITY}" -ne 40 ]; then
+        echo "RING_LOCAL_SIGNING_IDENTITY 是十六进制但不是 40 位 SHA-1" >&2
+        exit 1
+    fi
+    if ! printf '%s' "$LOCAL_CERT_SHA256" | grep -Eq '^[0-9A-Fa-f]{64}$'; then
+        echo "RING_LOCAL_SIGNING_CERT_SHA256 必须是 64 位十六进制" >&2
+        exit 1
+    fi
+fi
+
 for arch in $ARCHS; do
     triple="$arch-apple-macos$DEPLOYMENT_TARGET"
     echo "==> compiling $arch ($triple)"
@@ -73,14 +93,56 @@ if ! cmp -s "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"; then
     exit 1
 fi
 
-echo "==> ad-hoc signing the bundle"
-codesign --force --sign - --timestamp=none "$APP"
+# An authorisation prompt must fail the build instead of hanging it: the signature step is
+# the only place that can ask for one.
+sign_with_watchdog() {
+    "$@" &
+    local pid=$!
+    local ticks=0
+    while kill -0 "$pid" 2>/dev/null; do
+        ticks=$((ticks + 1))
+        if [ "$ticks" -gt 30 ]; then
+            echo "签名超过 30 秒没有完成（可能出现了钥匙串授权提示），已终止；未改动任何产物" >&2
+            kill -9 "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            return 1
+        fi
+        sleep 1
+    done
+    wait "$pid"
+}
+
+if [ -n "$LOCAL_IDENTITY" ]; then
+    # Only the generated bundle records the policy. Packaging/Info.plist keeps no personal
+    # fingerprint, so a published build can never inherit this Mac's identity.
+    /usr/libexec/PlistBuddy -c "Add :RingLocalSigningIdentitySHA1 string $LOCAL_IDENTITY" "$APP/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Add :RingLocalSigningCertificateSHA256 string $LOCAL_CERT_SHA256" "$APP/Contents/Info.plist"
+    echo "==> signing the bundle with the local identity"
+    sign_with_watchdog codesign --force --sign "$LOCAL_IDENTITY" --timestamp=none "$APP"
+else
+    echo "==> ad-hoc signing the bundle"
+    codesign --force --sign - --timestamp=none "$APP"
+fi
 
 echo "==> verifying"
 lipo -info "$APP/Contents/MacOS/Ring"
 file "$APP/Contents/MacOS/Ring"
 codesign --verify --strict "$APP"
 codesign -dv "$APP" 2>&1 | grep -E 'Identifier|Signature|Format' || true
+
+if [ -n "$LOCAL_IDENTITY" ]; then
+    SCRATCH="$BUILD/local-signing/scratch"
+    mkdir -p "$SCRATCH"
+    codesign -d --extract-certificates="$SCRATCH/leaf" "$APP" >/dev/null 2>&1
+    actual_cert="$(shasum -a 256 "$SCRATCH/leaf0" | awk '{print $1}')"
+    rm -f "$SCRATCH/leaf0"
+    expected_cert="$(printf '%s' "$LOCAL_CERT_SHA256" | tr 'A-Z' 'a-z')"
+    if [ "$actual_cert" != "$expected_cert" ]; then
+        echo "签名证书指纹与 RING_LOCAL_SIGNING_CERT_SHA256 不一致：$actual_cert" >&2
+        exit 1
+    fi
+    echo "==> local signing certificate: $actual_cert"
+fi
 
 echo "==> icon"
 ls -l "$APP/Contents/Resources/Ring.icns"

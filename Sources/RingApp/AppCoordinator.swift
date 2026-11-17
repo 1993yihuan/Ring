@@ -52,6 +52,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                                                        supportDirectory: supportDirectory)
         let store = SlotStore(directory: dataDirectory)
         self.store = store
+        // One line per changed listen outcome: enough to tell "no permission" from
+        // "authorised but the tap did not start", with no input content.
+        monitor.diagnosticFile = dataDirectory.appendingPathComponent("listen-diagnostics.log")
 
         do {
             session.update(config: try store.load())
@@ -563,7 +566,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         switch monitor.health {
         case .running: listener = .running
         case .stopped: listener = .stopped
-        case .needsPermission, .tapDisabled: listener = .failed
+        case .needsPermission, .tapUnavailable, .tapDisabled: listener = .failed
         }
         return PermissionStatus(access: InputMonitorPermission.listenAccess, listener: listener)
     }
