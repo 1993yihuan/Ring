@@ -62,6 +62,8 @@ require_exact_arch() {
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/output-guard.sh
 source "$ROOT/scripts/lib/output-guard.sh"
+# shellcheck source=lib/local-signing-guard.sh
+source "$ROOT/scripts/lib/local-signing-guard.sh"
 
 caller_pwd="$(pwd)"
 mkdir -p -- "$(dirname -- "$dmg_arg")"
@@ -121,6 +123,12 @@ fi
 
 built_raw="$(lipo -archs "${app}/Contents/MacOS/Ring")"
 require_exact_arch "$built_raw" "$arch" "build.sh"
+
+# Refuse before the image is created: a public build carries no local identity promise.
+if ! ring_reject_local_signing_keys "$app" "build.sh 产物"; then
+    echo "==> 已拒绝打包：公开包不能带本机签名策略键" >&2
+    exit 3
+fi
 
 stage_dir=""
 mountpoint=""
@@ -190,6 +198,11 @@ fi
 
 echo "==> codesign --verify --strict ${bundled}"
 codesign --verify --strict "$bundled"
+# The same rule on the artifact a user would download, not only on the build output.
+if ! ring_reject_local_signing_keys "$bundled" "DMG 内的 Ring.app"; then
+    echo "==> 已拒绝发布：DMG 内的公开包不能带本机签名策略键" >&2
+    exit 3
+fi
 # Read codesign to completion, then match the saved text. Do not pipe
 # codesign into grep -q; closing that pipe early is what aborted xcodebuild.
 signature="$(codesign -dv "$bundled" 2>&1)"

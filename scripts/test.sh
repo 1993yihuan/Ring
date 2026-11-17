@@ -22,3 +22,6 @@ swift test --scratch-path "$BUILD/scratch-test" \
 # The release body is hand-written per version, so its format needs the same gate as the
 # code: a missing or malformed docs/release-notes/<tag>.md must fail before publishing.
 ./scripts/test-release-notes.sh
+
+# A published package must carry no local signing policy key, not even one or an empty value.
+./scripts/test-local-signing-guard.sh

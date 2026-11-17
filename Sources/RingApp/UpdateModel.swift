@@ -20,8 +20,11 @@ final class LiveUpdateService: UpdateServicing {
     private let client = UpdateClient()
     private var download: UpdateClient.Download?
     private let workRoot: URL
+    /// The bundle this process started from, captured at launch and never refreshed.
+    private let launchIdentity: BundleIdentity?
 
-    init(workRoot: URL? = nil) {
+    init(workRoot: URL? = nil, launchIdentity: BundleIdentity? = launchBundle) {
+        self.launchIdentity = launchIdentity
         if let workRoot {
             self.workRoot = workRoot
         } else {
@@ -85,6 +88,7 @@ final class LiveUpdateService: UpdateServicing {
         // to a system dialog: the old version may be one that cannot show anything itself.
         let reporting = UpdateInstaller.Reporting.live(in: workRoot)
         return UpdateInstaller.install(prepared: prepared, target: target,
+                                       launchedFrom: launchIdentity,
                                        runningPID: ProcessInfo.processInfo.processIdentifier,
                                        reporting: reporting)
     }
@@ -117,12 +121,15 @@ final class UpdateModel: ObservableObject {
     private var attempt = 0
     private var checkToken = 0
     private let target: URL
+    private let launchIdentity: BundleIdentity?
 
     init(bundle: Bundle = .main,
          service: UpdateServicing = LiveUpdateService(),
-         target: URL? = nil) {
+         target: URL? = nil,
+         launchIdentity: BundleIdentity? = launchBundle) {
         self.service = service
         self.target = target ?? bundle.bundleURL
+        self.launchIdentity = launchIdentity
         self.currentVersionText = (bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "未知"
         self.currentVersion = SemanticVersion(string: currentVersionText)
     }
@@ -166,6 +173,13 @@ final class UpdateModel: ObservableObject {
     func downloadAndInstall() {
         // One installation at a time: a second click while installing must not start another.
         guard case .available(let candidate) = phase else { return }
+        // Refused before the download: when the disk copy is not the running one, restarting is
+        // the only fix, and downloading first would not change that.
+        if let failure = UpdateTargetCheck.failure(launched: launchIdentity,
+                                                   current: BundleIdentity(app: target)) {
+            phase = .failed(failure.description)
+            return
+        }
         pendingCandidate = candidate
         attempt += 1
         let currentAttempt = attempt

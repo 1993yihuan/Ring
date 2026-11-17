@@ -81,7 +81,7 @@ enum LocalResign {
             return .failure(.installFailed("重签后的证书指纹与本机策略不一致：\(certificate)"))
         }
 
-        guard LocalSigningPolicy(info: Bundle(path: app.path)?.infoDictionary) == policy else {
+        guard LocalSigningPolicy(info: BundleOnDisk.info(of: app)) == policy else {
             return .failure(.installFailed("重签后的包内策略与本机策略不一致"))
         }
 

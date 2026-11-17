@@ -94,7 +94,7 @@ Ring 的槽位配置存在个人文件夹的 `Library/Application Support/Ring` 
 
 ## 已知限制
 
-- 签名是 ad-hoc，没有 Developer ID，也没有公证。第一次打开需要自己放行。
+- 签名是 ad-hoc，没有 Developer ID，也没有公证。第一次打开需要自己放行。应用内更新会替换 Ring.app 并重新打开；如果之前勾选过输入监控，可能需要在系统设置里再勾一次。
 - 安装包按架构分别打包。Apple Silicon 包在打包后核对了可执行文件的架构，但没有在 M 系列机器上实际运行过。
 - 0.1.3 及更早的安装包把配置写在 Ring.app 所在文件夹的上一级 data 目录。新版只读 `~/Library/Application Support/Ring`，不会自动搬动旧文件。
 - 多显示器、缩放、睡眠唤醒等场景还没有逐项实测。

@@ -101,7 +101,7 @@ enum UpdateInstaller {
     }
 
     static func facts(ofApp app: URL) -> PackageFacts {
-        let info = Bundle(path: app.path)?.infoDictionary
+        let info = BundleOnDisk.info(of: app)
         let executableName = (info?["CFBundleExecutable"] as? String) ?? "Ring"
         let executable = app.appendingPathComponent("Contents/MacOS/\(executableName)")
         let hasExecutable = FileManager.default.isExecutableFile(atPath: executable.path)
@@ -135,9 +135,11 @@ enum UpdateInstaller {
         """
         #!/bin/sh
         # 1 target  2 new  3 backup  4 pid  5 launch  6 wait ticks  7 confirm ticks  8 stage dir
-        # 9 result file  10 notify script
+        # 9 result file  10 notify script  11 target's executable  12 its stamp
+        # 13 staged executable  14 its stamp
         target="$1"; new="$2"; backup="$3"; pid="$4"; launch="$5"
         waitTicks="$6"; confirmTicks="$7"; stage="$8"; result="$9"; notify="${10}"
+        targetExec="${11}"; targetStamp="${12}"; newExec="${13}"; newStamp="${14}"
 
         cleanup() {
           [ -n "$stage" ] && /bin/rm -rf "$stage"
@@ -203,6 +205,18 @@ enum UpdateInstaller {
           finish "not-replaced" "Ring 还在运行，更新没有替换；旧版本原样保留" 4
         fi
 
+        # Both sides are described from disk again here: the executable and the Info.plist its
+        # policy came from. The updater saw them earlier, and this helper then waited for the app
+        # to quit, so either can have been replaced or had its policy keys edited since.
+        targetNow="$(/usr/bin/stat -f '%d:%i:%z:%m' "$targetExec" 2>/dev/null)|$(/usr/bin/stat -f '%d:%i:%z:%m' "$target/Contents/Info.plist" 2>/dev/null)"
+        if [ "$targetNow" != "$targetStamp" ]; then
+          finish "target-changed" "磁盘上的 Ring.app 在这期间被替换或改动，没有安装；请退出后重新打开 Ring 再试" 7
+        fi
+        newNow="$(/usr/bin/stat -f '%d:%i:%z:%m' "$newExec" 2>/dev/null)|$(/usr/bin/stat -f '%d:%i:%z:%m' "$new/Contents/Info.plist" 2>/dev/null)"
+        if [ "$newNow" != "$newStamp" ]; then
+          finish "failed" "暂存的新版本在安装前发生了变化，没有替换；旧版本原样保留" 8
+        fi
+
         if [ -e "$target" ]; then
           /bin/mv "$target" "$backup" || finish "failed" "无法备份旧版本，未做任何替换；旧版本原样保留" 2
         fi
@@ -256,12 +270,21 @@ enum UpdateInstaller {
     /// dialog the helper shows.
     static func install(prepared: Prepared,
                         target: URL,
+                        launchedFrom: BundleIdentity?,
                         runningPID: pid_t,
                         launchCommand: String = "/usr/bin/open",
                         reporting: Reporting? = nil,
                         waitForExit: Bool = false,
                         waitTicks: Int = 600,
                         confirmTicks: Int = 20) -> Result<Void, UpdateFailure> {
+        // The target must be proven to be the bundle this process started from before any policy
+        // decision or private key is involved. A path that holds a different bundle now was
+        // replaced or rebuilt under the running copy, and swapping it would write over a version
+        // nobody chose. Read from disk: a Bundle object would answer with the bytes it cached.
+        if let failure = UpdateTargetCheck.failure(launched: launchedFrom,
+                                                   current: BundleIdentity(app: target)) {
+            return .failure(failure)
+        }
         let fileManager = FileManager.default
         let parent = target.deletingLastPathComponent()
         guard target.pathExtension == "app" else {
@@ -298,8 +321,8 @@ enum UpdateInstaller {
         // A locally signed build states its identity policy in its own Info.plist. The
         // installed app decides what this Mac accepts; the package's keys are only used to
         // notice that installing it would change the identity behind the user's permission.
-        let targetPolicy = LocalSigningPolicyState.state(info: Bundle(path: target.path)?.infoDictionary)
-        let incomingPolicy = LocalSigningPolicyState.state(info: Bundle(path: prepared.app.path)?.infoDictionary)
+        let targetPolicy = LocalSigningPolicyState.state(info: BundleOnDisk.info(of: target))
+        let incomingPolicy = LocalSigningPolicyState.state(info: BundleOnDisk.info(of: prepared.app))
         switch LocalSigningGate.decide(target: targetPolicy, incoming: incomingPolicy) {
         case .publicUpdate:
             break
@@ -329,7 +352,23 @@ enum UpdateInstaller {
             }
         }
 
-        let previousVersion = Bundle(path: target.path)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "old"
+        // The target is compared against the launch snapshot a second time, right before the
+        // helper takes over. The first check ran before the copy, the verify and any resigning;
+        // a bundle swapped in during those seconds must not become the reference itself.
+        if let failure = UpdateTargetCheck.failure(launched: launchedFrom,
+                                                   current: BundleIdentity(app: target)) {
+            discardStage()
+            return .failure(failure)
+        }
+        // Described from disk at the last moment, with the plist the policy came from, so the
+        // helper can also refuse a target whose policy keys were edited while it waited.
+        guard let targetBaseline = BundleOnDisk.helperBaseline(of: target),
+              let stagedBaseline = BundleOnDisk.helperBaseline(of: stagedApp) else {
+            discardStage()
+            return .failure(.installFailed("无法确认要替换的文件身份，已停止"))
+        }
+
+        let previousVersion = BundleOnDisk.string("CFBundleShortVersionString", of: target) ?? "old"
         let backupName = "\(target.lastPathComponent).pre-\(previousVersion)"
         var backup = parent.appendingPathComponent(backupName, isDirectory: true)
         if fileManager.fileExists(atPath: backup.path) {
@@ -355,7 +394,9 @@ enum UpdateInstaller {
                              String(runningPID), launchCommand,
                              String(waitTicks), String(confirmTicks), stage.path,
                              reporting?.resultFile.path ?? "",
-                             reporting?.notifyScript?.path ?? ""]
+                             reporting?.notifyScript?.path ?? "",
+                             BundleOnDisk.executable(of: target).path, targetBaseline,
+                             BundleOnDisk.executable(of: stagedApp).path, stagedBaseline]
         let pipe = Pipe()
         if waitForExit {
             process.standardOutput = pipe
@@ -381,6 +422,8 @@ enum UpdateInstaller {
             return .success(())
         case 4:
             return .failure(.installFailed("Ring 还在运行，没有替换；旧版本原样保留"))
+        case 7:
+            return .failure(.targetChanged("它在这次启动后被替换或改动过，不是正在运行的这一份。请退出 Ring，重新打开后再更新。"))
         default:
             return .failure(.installFailed("安装没有完成：\(lastLine(of: output))"))
         }

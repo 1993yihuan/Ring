@@ -3021,3 +3021,129 @@ final class ListenStartOutcomeTests: XCTestCase {
         XCTAssertFalse(line.contains("char"))
     }
 }
+
+// MARK: - The bundle on disk, not a Bundle object's cached copy
+
+final class BundleOnDiskTests: XCTestCase {
+    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
+    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
+    private var scratch: URL!
+
+    override func setUpWithError() throws {
+        scratch = testScratchDirectory()
+    }
+
+    override func tearDownWithError() throws {
+        if let scratch { try? FileManager.default.removeItem(at: scratch) }
+    }
+
+    /// A minimal bundle at <scratch>/Ring.app. A second call rewrites only the plist, so the
+    /// executable keeps its file identity and the test can tell the two kinds of change apart.
+    @discardableResult
+    private func makeApp(version: String = "1.0", keys: [String: String] = [:]) throws -> URL {
+        let app = scratch.appendingPathComponent("Ring.app", isDirectory: true)
+        let contents = app.appendingPathComponent("Contents", isDirectory: true)
+        let macOS = contents.appendingPathComponent("MacOS", isDirectory: true)
+        try FileManager.default.createDirectory(at: macOS, withIntermediateDirectories: true)
+        var info: [String: Any] = ["CFBundleExecutable": "Ring", "CFBundleShortVersionString": version]
+        for (key, value) in keys { info[key] = value }
+        let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+        try data.write(to: contents.appendingPathComponent("Info.plist"))
+        let executable = macOS.appendingPathComponent("Ring")
+        if !FileManager.default.fileExists(atPath: executable.path) {
+            try Data("one".utf8).write(to: executable)
+        }
+        return app
+    }
+
+    private func statStamp(of file: URL) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/stat")
+        process.arguments = ["-f", "%d:%i:%z:%m", file.path]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        process.waitUntilExit()
+        let text = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    func testAPlistRewrittenAfterABundleReadIsSeenAsItIsOnDisk() throws {
+        let app = try makeApp(version: "0.1.10", keys: [LocalSigningPolicy.identityKey: sha1,
+                                                        LocalSigningPolicy.certificateKey: sha256])
+        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?[LocalSigningPolicy.identityKey] as? String, sha1)
+        try makeApp(version: "0.1.12")
+        // Records the hazard the updater must not inherit: Bundle answers with the dictionary it
+        // read first, whatever the path holds now.
+        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?[LocalSigningPolicy.identityKey] as? String, sha1,
+                       "Bundle 按路径缓存 Info.plist；此断言不成立说明缓存行为已变")
+        XCTAssertEqual(LocalSigningPolicyState.state(info: BundleOnDisk.info(of: app)), .none)
+        XCTAssertEqual(BundleOnDisk.string("CFBundleShortVersionString", of: app), "0.1.12")
+    }
+
+    func testTheStampIsTheSameTextTheInstallHelperCompares() throws {
+        let app = try makeApp()
+        let identity = try XCTUnwrap(BundleIdentity(app: app))
+        XCTAssertEqual(identity.executable, try statStamp(of: BundleOnDisk.executable(of: app)))
+    }
+
+    func testTheHelperBaselineAlsoCoversTheInfoPlist() throws {
+        let app = try makeApp()
+        let baseline = try XCTUnwrap(BundleOnDisk.helperBaseline(of: app))
+        let expected = try statStamp(of: BundleOnDisk.executable(of: app))
+            + "|" + statStamp(of: app.appendingPathComponent("Contents/Info.plist"))
+        XCTAssertEqual(baseline, expected)
+        // Editing the plist alone leaves the executable stamp as it was, so the policy keys need
+        // their own part: otherwise a bundle whose keys were added while the helper waited passes.
+        let executableBefore = try XCTUnwrap(BundleIdentity.executableStamp(of: app))
+        try makeApp(keys: [LocalSigningPolicy.identityKey: sha1,
+                           LocalSigningPolicy.certificateKey: sha256])
+        XCTAssertEqual(try XCTUnwrap(BundleIdentity.executableStamp(of: app)), executableBefore)
+        XCTAssertNotEqual(try XCTUnwrap(BundleOnDisk.helperBaseline(of: app)), baseline)
+    }
+
+    func testAnUntouchedBundleIsStillTheBundleThisProcessStartedFrom() throws {
+        let app = try makeApp()
+        let launched = try XCTUnwrap(BundleIdentity(app: app))
+        let current = try XCTUnwrap(BundleIdentity(app: app))
+        XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: current), .sameBundle)
+        XCTAssertNil(UpdateTargetCheck.failure(launched: launched, current: current))
+    }
+
+    func testAReplacedExecutableIsRefusedAndAsksForARestart() throws {
+        let app = try makeApp()
+        let launched = try XCTUnwrap(BundleIdentity(app: app))
+        try Data("a different build".utf8).write(to: BundleOnDisk.executable(of: app))
+        let current = try XCTUnwrap(BundleIdentity(app: app))
+        XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: current), .replacedSinceLaunch)
+        let failure = try XCTUnwrap(UpdateTargetCheck.failure(launched: launched, current: current))
+        guard case .targetChanged(let reason) = failure else {
+            return XCTFail("expected targetChanged, got \(failure)")
+        }
+        XCTAssertTrue(reason.contains("退出 Ring"), reason)
+        XCTAssertFalse(failure.description.contains("迁移"), failure.description)
+    }
+
+    func testAnUnreadableTargetIsNeverTreatedAsTheSameBundle() {
+        XCTAssertEqual(UpdateTargetCheck.verdict(launched: nil, current: nil), .unreadable)
+        let launched = BundleIdentity(executable: "1:2:3:4", policy: .none)
+        XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: nil), .unreadable)
+        guard let refusal = UpdateTargetCheck.failure(launched: launched, current: nil) else {
+            return XCTFail("an unreadable target must be refused, not accepted")
+        }
+        guard case .targetChanged(_) = refusal else {
+            return XCTFail("expected targetChanged, got \(refusal)")
+        }
+    }
+
+    func testPolicyKeysWrittenIntoTheBundleChangeTheIdentity() throws {
+        let app = try makeApp()
+        let launched = try XCTUnwrap(BundleIdentity(app: app))
+        try makeApp(keys: [LocalSigningPolicy.identityKey: sha1,
+                           LocalSigningPolicy.certificateKey: sha256])
+        let current = try XCTUnwrap(BundleIdentity(app: app))
+        XCTAssertEqual(current.executable, launched.executable)
+        XCTAssertNotEqual(current.policy, launched.policy)
+        XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: current), .replacedSinceLaunch)
+    }
+}

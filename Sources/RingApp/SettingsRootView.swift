@@ -143,7 +143,7 @@ struct AboutSettingsPage: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                 content
-                Text("更新只来自 GitHub 上的正式版本，下载后按官方摘要校验。Ring 没有开发者签名，安装后系统可能要求你手动放行新版本，输入监控权限也可能需要重新勾选。")
+                Text("更新只来自 GitHub 上的正式版本，下载后按官方摘要校验。Ring 没有开发者签名，安装后系统可能要求你手动放行新版本。更新完成后 Ring 会重新打开；如果之前勾选过输入监控，可能需要在系统设置里再勾一次。")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
