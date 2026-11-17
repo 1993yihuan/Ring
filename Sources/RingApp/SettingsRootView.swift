@@ -131,8 +131,14 @@ struct AboutSettingsPage: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Ring")
-                    .font(.system(size: 15, weight: .semibold))
+                // The page's one action lives in the title row: beside "Ring", as the reference
+                // picture asks, and above everything the notes can grow into.
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    Text("Ring")
+                        .font(.system(size: 15, weight: .semibold))
+                    action
+                    Spacer(minLength: 0)
+                }
                 Text("当前版本 \(update.currentVersionText)")
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
@@ -149,11 +155,31 @@ struct AboutSettingsPage: View {
         .background(Color(nsColor: .windowBackgroundColor))
     }
 
+    /// The current phase's own button, and the only one on the page: a check, a download, a
+    /// cancel, or another check. It never moves into the notes.
+    @ViewBuilder
+    private var action: some View {
+        switch update.phase {
+        case .idle:
+            Button("检查更新") { update.check() }
+        case .upToDate:
+            Button("重新检查") { update.check() }
+        case .available:
+            Button("更新") { update.downloadAndInstall() }
+        case .downloading:
+            Button("取消") { update.cancelDownload() }
+        case .failed:
+            Button("重新检查") { update.check() }
+        case .checking, .installing:
+            EmptyView()
+        }
+    }
+
     @ViewBuilder
     private var content: some View {
         switch update.phase {
         case .idle:
-            Button("检查更新") { update.check() }
+            EmptyView()
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -161,17 +187,11 @@ struct AboutSettingsPage: View {
             }
         case .upToDate(let version):
             Text("已是最新版本（\(version.description)）").font(.system(size: 13))
-            Button("重新检查") { update.check() }
         case .available(let candidate):
             Text("有新版本 \(candidate.version.description)").font(.system(size: 13, weight: .medium))
             if !candidate.notes.isEmpty {
-                Text(candidate.notes)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxHeight: 180, alignment: .topLeading)
+                notes(candidate.notes)
             }
-            Button("更新") { update.downloadAndInstall() }
             Text("更新会下载 \(candidate.asset.name)（\(ByteCountFormatter.string(fromByteCount: Int64(candidate.asset.size), countStyle: .file))），校验通过后替换当前 Ring 并重新打开。")
                 .font(.system(size: 11))
                 .foregroundStyle(.tertiary)
@@ -181,7 +201,6 @@ struct AboutSettingsPage: View {
                 .frame(maxWidth: 320)
             Text("正在下载 \(Int((progress * 100).rounded()))%")
                 .font(.system(size: 13))
-            Button("取消") { update.cancelDownload() }
         case .installing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
@@ -192,7 +211,22 @@ struct AboutSettingsPage: View {
                 .font(.system(size: 12))
                 .foregroundStyle(.red)
                 .fixedSize(horizontal: false, vertical: true)
-            Button("重新检查") { update.check() }
         }
+    }
+
+    /// Release notes live in their own scroller, capped at 180 pt: they can be read in full
+    /// without growing the page, pushing the title row away or painting over the safety hint
+    /// below them. Short notes take only the height they need.
+    private func notes(_ text: String) -> some View {
+        ScrollView {
+            Text(text)
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .frame(maxHeight: 180)
+        .fixedSize(horizontal: false, vertical: true)
     }
 }

@@ -173,7 +173,7 @@ expect_refusal "混入英文内部测试信息" "v9.9.1"
 expect_refusal "缺少该版本的说明文件" "v9.9.9"
 
 if [ "$failures" -eq 0 ]; then
-    echo "== $checks 项检查全部通过（9 版正文 + 1 个正确样例 3 项 + 8 个拒绝用例）"
+    echo "== $checks 项检查全部通过（docs/release-notes 下每版正文各 1 项 + 正确样例 4 项 + 8 个拒绝用例）"
 else
     echo "== 失败 $failures 项（共 $checks 项检查）"
     exit 1
