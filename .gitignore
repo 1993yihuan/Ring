@@ -14,7 +14,9 @@ data/
 # 内部过程记录：仅本机保留，不随仓库分发
 AGENTS.md
 DEVELOPMENT_PLAN.md
-docs/
+# docs/ 只有发布正文要随仓库走：模板与九版正文是发布链路的输入。
+docs/*
+!docs/release-notes/
 
 # 界面设计稿与生成过程资料：仅本机保留
 #

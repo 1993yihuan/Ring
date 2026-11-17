@@ -9,6 +9,12 @@
 # workflow does not call notarytool, import a certificate, or read any secret
 # other than the default GITHUB_TOKEN (contents: write creates the Release).
 #
+# The release body is not generated here: scripts/release-notes.sh reads
+# docs/release-notes/<tag>.md, which holds the same two sections for every
+# version (## 新增与改进, then ## What's New & Improved), adds one short
+# download line per language, and fails the job when that file is missing or
+# does not match the format. There is no fallback to install instructions.
+#
 # Runner and toolchain match CI: macos-26 with Xcode 26.3 selected via
 # xcode-select and DEVELOPER_DIR. The image can compile this package
 # (Swift tools 6.0, deployment target macOS 13.0).
@@ -47,6 +53,13 @@ jobs:
             echo "Current ref: ${GITHUB_REF}" >&2
             exit 1
           fi
+
+      - name: Read the release notes for this tag
+        run: |
+          set -euo pipefail
+          ./scripts/release-notes.sh "${GITHUB_REF_NAME}" > "${RUNNER_TEMP}/release-notes.md"
+          # Fail here, before anything is packaged, if the body is missing or malformed.
+          head -3 "${RUNNER_TEMP}/release-notes.md"
 
       - name: Select Xcode 26.3
         run: |
@@ -125,27 +138,11 @@ jobs:
           done
 
           notes="${RUNNER_TEMP}/release-notes.md"
-          cat > "$notes" <<EOF
-          Ring ${version} for macOS.
-
-          Download the disk image that matches your Mac. Each file is a compressed DMG with Ring.app at the top of the volume. There is no zip.
-
-          - ${intel_name} — Intel Macs. The executable is x86_64 only.
-          - ${silicon_name} — Apple Silicon (M-series) Macs. The executable is arm64 only.
-
-          Apple menu → About This Mac: if Chip is Apple M1 or later, use the Apple Silicon DMG. If Processor is Intel, use the Intel DMG. An arm64-only app does not run on an Intel Mac.
-
-          This build is ad-hoc signed only. It is not notarized, and it is not Developer ID signed. macOS Gatekeeper will block the first launch until you allow the app yourself.
-
-          1. Double-click the DMG in Finder to open it. The volume contains Ring.app.
-          2. Drag Ring.app to the Applications folder if you want it there. You can also open it from the disk image.
-          3. The first launch may be blocked. Then use either of these:
-             - System Settings → Privacy & Security → Open Anyway
-             - or right-click the app and choose Open, then confirm Open
-          4. Input Monitoring is a separate permission. After Gatekeeper lets the app open, use the menu bar command to request Input Monitoring, then enable Ring under System Settings → Privacy & Security → Input Monitoring. Quit and reopen Ring if macOS asks you to.
-
-          此构建只做了 ad-hoc 签名，没有公证。请按机型下载 DMG，不是 zip：Intel 用 ${intel_name}（只有 x86_64），Apple 芯片（M 系列）用 ${silicon_name}（只有 arm64）。在访达里双击 DMG，卷内顶层是 Ring.app。第一次打开可能被 Gatekeeper 拦截。请到「系统设置 → 隐私与安全性」点「仍要打开」，或在访达里右键 Ring.app 选择「打开」。放行之后仍需单独授予「输入监控」权限。
-          EOF
+          # Produced and validated by the "Read the release notes for this tag" step.
+          if [[ ! -s "$notes" ]]; then
+            echo "Missing ${notes}: the release-notes step must run first." >&2
+            exit 1
+          fi
 
           title="Ring ${version}"
           if gh release view "$tag" >/dev/null 2>&1; then

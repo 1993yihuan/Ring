@@ -18,3 +18,7 @@ swift test --scratch-path "$BUILD/scratch-test" \
     --cache-path "$BUILD/swiftpm-cache" \
     --config-path "$BUILD/swiftpm-config" \
     --security-path "$BUILD/swiftpm-security" 2>&1 | tee "$BUILD/test.log"
+
+# The release body is hand-written per version, so its format needs the same gate as the
+# code: a missing or malformed docs/release-notes/<tag>.md must fail before publishing.
+./scripts/test-release-notes.sh
