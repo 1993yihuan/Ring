@@ -16,11 +16,11 @@ usage() { echo "用法：scripts/release-notes.sh <tag>；tag 形如 v0.1.10。"
 fail() { echo "拒绝生成发布说明：$1" >&2; exit 2; }
 
 [ -n "$TAG" ] || { usage; exit 2; }
-[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { usage; fail "“$TAG” 不是 vX.Y.Z 形式的版本标签"; }
+[[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { usage; fail "“${TAG}” 不是 vX.Y.Z 形式的版本标签"; }
 
 FILE="$NOTES_DIR/$TAG.md"
 if [ ! -f "$FILE" ]; then
-    fail "缺少 $TAG 的发布说明（$FILE）。先按 docs/release-notes/README.md 的格式写这一版，不会退回安装说明。"
+    fail "缺少 $TAG 的发布说明（${FILE}）。先按 docs/release-notes/README.md 的格式写这一版，不会退回安装说明。"
 fi
 
 zh_section=0
@@ -41,7 +41,7 @@ while IFS= read -r line || [ -n "$line" ]; do
         "")
             ;;
         "## "*|"# "*)
-            fail "第 $line_no 行：只允许两个小节标题，多出「$line」" ;;
+            fail "第 $line_no 行：只允许两个小节标题，多出「${line}」" ;;
         "- "*)
             case "$section" in
                 zh) zh_entries=$((zh_entries + 1)) ;;
@@ -53,7 +53,7 @@ while IFS= read -r line || [ -n "$line" ]; do
                     fail "第 $line_no 行：内部测试、构建或摘要信息不属于发布说明——$line" ;;
             esac ;;
         *)
-            fail "第 $line_no 行：只允许小节标题和「- 」条目，这里是「$line」" ;;
+            fail "第 $line_no 行：只允许小节标题和「- 」条目，这里是「${line}」" ;;
     esac
 done < "$FILE"
 

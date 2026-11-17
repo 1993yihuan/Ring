@@ -38,7 +38,7 @@ expect_refusal() {
     [ "$code" -eq 2 ] || detail="退出码 ${code}，应为 2"
     [ -z "$stdout_text" ] || detail="${detail:+${detail}；}stdout 泄漏正文"
     [ -n "$stderr_text" ] || detail="${detail:+${detail}；}stderr 没说原因"
-    check "$name（exit=2，stdout 为空）" "$([ -z "$detail" ] && echo 1 || echo 0)" "${detail:-$(printf '%s' "$stderr_text" | tail -1)}"
+    check "${name}（exit=2，stdout 为空）" "$([ -z "$detail" ] && echo 1 || echo 0)" "${detail:-$(printf '%s' "$stderr_text" | tail -1)}"
 }
 
 # 1. 仓库里每一版的正文都要能生成：中英条数一致，且尾句是中性的下载说明。
