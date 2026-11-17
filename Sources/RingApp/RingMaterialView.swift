@@ -2,7 +2,7 @@ import AppKit
 import RingCore
 
 /// The ring's plate: the website's warm off-white band with its grain, its two hairlines on
-/// each edge, its two drop shadows and the cyan wash on the selected slot, all clipped by
+/// each edge, its two drop shadows and the warm pad under the selected slot, all clipped by
 /// one ring-shaped mask whose stroke is as wide as the band.
 ///
 /// The launcher may scale and fade this whole view as one material: the icons are a sibling
@@ -18,7 +18,6 @@ final class RingMaterialView: NSView {
         static let bandBottom = NSColor(srgbRed: 0xE3 / 255, green: 0xDD / 255, blue: 0xD4 / 255, alpha: 1)
         static let bezel = NSColor(srgbRed: 0xC9 / 255, green: 0xC3 / 255, blue: 0xB9 / 255, alpha: 1)
         static let shadow = NSColor(srgbRed: 48 / 255, green: 42 / 255, blue: 36 / 255, alpha: 1)
-        static let accent = NSColor(srgbRed: 0x8F / 255, green: 0xDC / 255, blue: 0xEA / 255, alpha: 1)
     }
 
     /// Two drop shadows, as in the website's `filter: drop-shadow(…) drop-shadow(…) `.
@@ -29,10 +28,10 @@ final class RingMaterialView: NSView {
     private let materialMask = CAShapeLayer()
     private let tint = CAGradientLayer()
     private let grain = CALayer()
-    /// The selected slot's wash: also clipped to the band, so it never covers an icon.
+    /// The selected slot's pad: also clipped to the band, so it never covers an icon.
     private let washHost = CALayer()
     private let washMask = CAShapeLayer()
-    private let wash = CAGradientLayer()
+    private let wash = CAShapeLayer()
     private let outerBezel = CAShapeLayer()
     private let outerHighlight = CAShapeLayer()
     private let innerBezel = CAShapeLayer()
@@ -110,13 +109,9 @@ final class RingMaterialView: NSView {
         washHost.mask = washMask
         washHost.opacity = 0
         layer?.addSublayer(washHost)
-        wash.type = .radial
-        wash.startPoint = CGPoint(x: 0.5, y: 0.5)
-        wash.endPoint = CGPoint(x: 1, y: 1)
-        wash.colors = [Palette.accent.withAlphaComponent(0.55).cgColor,
-                       Palette.accent.withAlphaComponent(0.18).cgColor,
-                       Palette.accent.withAlphaComponent(0).cgColor]
-        wash.locations = [0, 0.55, 1]
+        // The band's own bezel grey at 62%: the pad is the band a shade deeper, so it stays
+        // in the warm family and the grain under it still shows through.
+        wash.fillColor = Palette.bezel.withAlphaComponent(0.62).cgColor
         washHost.addSublayer(wash)
 
         for edge in [outerBezel, outerHighlight, innerBezel, innerHighlight] {
@@ -171,6 +166,9 @@ final class RingMaterialView: NSView {
             mask.fillColor = nil
             mask.strokeColor = NSColor.black.cgColor
         }
+        // A shape layer rasterises into its own bounds: without the frame it would draw
+        // nothing at all, and layoutWash only writes its path.
+        wash.frame = washHost.bounds
         tint.frame = material.bounds
         grain.frame = material.bounds
         if grainPixels != material.bounds.size || grainScale != scale {
@@ -285,10 +283,9 @@ final class RingMaterialView: NSView {
         washHost.removeAnimation(forKey: Self.highlightFadeKey)
     }
 
-    /// The wash sits on the band under the selected slot: the website's `<ellipse rx="58"
-    /// ry="46">` turned to face that slot, so its long side runs around the band. A new
-    /// target is a 50 ms fade only: the icons and the hit frames stay where they are, so
-    /// the target under the pointer never moves.
+    /// The pad is the selected slot's own sector of the band, narrow at the hole and wide at
+    /// the outer edge, with rounded corners. A new target is a 50 ms fade only: the icons and
+    /// the hit frames stay where they are, so the target under the pointer never moves.
     /// `animate` says a target really changed. A layout for the same target — every
     /// settings preview draw, a re-prepare, a resize — writes the values and animates
     /// nothing, so the shared drawing stays static where it is not the launcher.
@@ -310,14 +307,15 @@ final class RingMaterialView: NSView {
         CATransaction.setDisableActions(true)
         washHost.opacity = slot == nil ? 0 : 1
         if let slot {
-            let offset = RingLayout.slotOffset(slot, count: geometry.iconFrames.count)
-            wash.bounds = CGRect(x: 0,
-                                 y: 0,
-                                 width: 2 * RingPresentation.highlightTangentialRadius * unit,
-                                 height: 2 * RingPresentation.highlightRadialRadius * unit)
-            wash.position = CGPoint(x: centre.x + offset.x * RingPresentation.highlightDistance * unit,
-                                    y: centre.y + offset.y * RingPresentation.highlightDistance * unit)
-            wash.transform = CATransform3DMakeRotation(atan2(offset.y, offset.x) - .pi / 2, 0, 0, 1)
+            let count = geometry.iconFrames.count
+            let inset = RingPresentation.selectionInset * unit
+            wash.path = RingPresentation.selectionSectorPath(
+                centre: centre,
+                direction: RingLayout.slotOffset(slot, count: count),
+                innerRadius: RingPresentation.innerRadius(plateRect: plate) + inset,
+                outerRadius: plate.width / 2 - inset,
+                halfAngle: RingPresentation.selectionHalfAngle(slotCount: count),
+                cornerRadius: RingPresentation.selectionCornerRadius * unit)
         }
         CATransaction.commit()
 

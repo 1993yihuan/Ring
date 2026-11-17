@@ -42,14 +42,71 @@ public enum RingPresentation {
 
     public static let labelSize: CGFloat = 16.8
 
-    // MARK: - Selected slot (`<ellipse rx="58" ry="46">` filled with `#8FDCEA`)
+    // MARK: - Selected slot background
 
-    /// Across the band, i.e. along the radius: `ry`.
-    public static let highlightRadialRadius: CGFloat = 46
-    /// Around the band: `rx`.
-    public static let highlightTangentialRadius: CGFloat = 58
-    /// The wash sits just inside the icon circle (200 − 78 above the centre).
-    public static let highlightDistance: CGFloat = 122
+    /// The selection is a sector of the band itself, not the website's `<ellipse rx="58"
+    /// ry="46">`: one pad per slot, narrow at the hole and wide at the outer edge, so it
+    /// belongs to a single icon at any slot count. Canvas units, like every ratio above.
+
+    /// How far the pad stays inside the band's two edges.
+    public static let selectionInset: CGFloat = 2
+    /// Corner radius of the pad: the reference picture's rounded corners at the band's size.
+    public static let selectionCornerRadius: CGFloat = 9
+
+    /// Half the pad's angle: most of the slot's own pitch, capped at a quarter turn so three
+    /// slots still leave a visible gap between neighbouring pads.
+    public static func selectionHalfAngle(slotCount: Int) -> CGFloat {
+        min(0.9 * CGFloat.pi / CGFloat(max(slotCount, 1)), CGFloat.pi / 4)
+    }
+
+    /// The pad: the band sector between `innerRadius` and `outerRadius`, `2 * halfAngle` wide
+    /// around `direction`, with all four corners filleted. Angles increase
+    /// counter-clockwise because layer space here is y-up.
+    public static func selectionSectorPath(centre: CGPoint,
+                                           direction: CGPoint,
+                                           innerRadius: CGFloat,
+                                           outerRadius: CGFloat,
+                                           halfAngle: CGFloat,
+                                           cornerRadius: CGFloat) -> CGPath {
+        let path = CGMutablePath()
+        guard outerRadius > innerRadius, innerRadius > 0, halfAngle > 0 else { return path }
+        // A corner may not take more than half a radial side, nor more than half of its own
+        // arc: at eight slots the pad is narrow and the fillet has to give way.
+        let radius = min(cornerRadius,
+                         (outerRadius - innerRadius) / 2,
+                         outerRadius * halfAngle / 2,
+                         innerRadius * halfAngle / 2)
+        // A fillet of this radius gives up this much arc at each corner, and meets the radial
+        // side one radius in from it. Both corners are right angles, so the quadratic curve
+        // through the vertex is the fillet.
+        let outerInset = radius / outerRadius
+        let innerInset = radius / innerRadius
+        let base = atan2(direction.y, direction.x)
+        let start = base - halfAngle
+        let end = base + halfAngle
+        func point(_ radius: CGFloat, _ angle: CGFloat) -> CGPoint {
+            CGPoint(x: centre.x + radius * cos(angle), y: centre.y + radius * sin(angle))
+        }
+        path.move(to: point(outerRadius, start + outerInset))
+        path.addArc(center: centre,
+                    radius: outerRadius,
+                    startAngle: start + outerInset,
+                    endAngle: end - outerInset,
+                    clockwise: false)
+        path.addQuadCurve(to: point(outerRadius - radius, end), control: point(outerRadius, end))
+        path.addLine(to: point(innerRadius + radius, end))
+        path.addQuadCurve(to: point(innerRadius, end - innerInset), control: point(innerRadius, end))
+        path.addArc(center: centre,
+                    radius: innerRadius,
+                    startAngle: end - innerInset,
+                    endAngle: start + innerInset,
+                    clockwise: true)
+        path.addQuadCurve(to: point(innerRadius + radius, start), control: point(innerRadius, start))
+        path.addLine(to: point(outerRadius - radius, start))
+        path.addQuadCurve(to: point(outerRadius, start + outerInset), control: point(outerRadius, start))
+        path.closeSubpath()
+        return path
+    }
 
     // MARK: - Hover
 

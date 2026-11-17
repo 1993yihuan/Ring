@@ -2142,6 +2142,60 @@ final class RingPresentationTests: XCTestCase {
         XCTAssertLessThanOrEqual(hovered.width, hit, "悬停图标越出命中框")
         XCTAssertLessThanOrEqual(RingPresentation.emptyWellDiameter, hit, "空槽加号井越出命中框")
     }
+
+    /// The selected slot's background is that slot's own sector of the band: it sits between
+    /// the two band edges, is narrow at the hole and wide at the outer edge, keeps its corners
+    /// rounded, and never reaches a neighbouring slot's pad at any slot count the ring allows.
+    func testSelectionPadIsOneRoundedSectorOfTheBand() {
+        let centre = CGPoint(x: 200, y: 200)
+        let inner: CGFloat = 86
+        let outer: CGFloat = 170
+        let inset = RingPresentation.selectionInset
+        for count in LauncherConfiguration.visibleSlotRange {
+            let half = RingPresentation.selectionHalfAngle(slotCount: count)
+            let direction = RingLayout.slotOffset(0, count: count)
+            func point(_ radius: CGFloat, _ angle: CGFloat) -> CGPoint {
+                CGPoint(x: centre.x + radius * cos(angle), y: centre.y + radius * sin(angle))
+            }
+            let path = RingPresentation.selectionSectorPath(centre: centre,
+                                                             direction: direction,
+                                                             innerRadius: inner + inset,
+                                                             outerRadius: outer - inset,
+                                                             halfAngle: half,
+                                                             cornerRadius: RingPresentation.selectionCornerRadius)
+            let base = atan2(direction.y, direction.x)
+
+            // Under the icon, in the middle of the band: inside.
+            XCTAssertTrue(path.contains(point((inner + outer) / 2, base)), "N=\(count) 选中图标下方没有背景")
+
+            // The two band edges hold: nothing in the hole, nothing past the outer edge.
+            XCTAssertFalse(path.contains(point(inner - 6, base)), "N=\(count) 背景落进中孔")
+            XCTAssertFalse(path.contains(point(outer + 6, base)), "N=\(count) 背景越过环外缘")
+
+            // Narrow at the hole, wide at the outer edge: the same distance off the pad's own
+            // middle line is outside at the hole's side and inside at the outer side.
+            let offset = (outer * sin(half) + inner * sin(half)) / 2
+            let innerEdge = inner + inset + 1
+            let outerEdge = outer - inset - 1
+            XCTAssertFalse(path.contains(point(innerEdge, base + asin(offset / innerEdge))),
+                           "N=\(count) 背景在内缘应更窄")
+            XCTAssertTrue(path.contains(point(outerEdge, base + asin(offset / outerEdge))),
+                          "N=\(count) 背景在外缘应更宽")
+
+            // Rounded corners: the sector's square corner is cut off, the pad a little inside
+            // that corner is not.
+            XCTAssertFalse(path.contains(point(outer - inset, base + half)), "N=\(count) 角没有圆润")
+            XCTAssertTrue(path.contains(point(outer - inset, base + half - 25 / (outer - inset))),
+                          "N=\(count) 圆角吃掉过多背景")
+
+            // Next to the neighbouring slot's pad, not inside it.
+            if count > 1 {
+                let neighbour = RingLayout.slotOffset(1, count: count)
+                XCTAssertFalse(path.contains(point((inner + outer) / 2, atan2(neighbour.y, neighbour.x))),
+                               "N=\(count) 背景跨到相邻槽")
+            }
+        }
+    }
 }
 
 
