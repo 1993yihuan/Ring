@@ -519,15 +519,15 @@ final class RingCenterTests: XCTestCase {
     }
 
     func testCentreTextForEachHoverState() {
-        let app = RingCenter.text(for: .app("微信"), launches: true)
-        XCTAssertEqual(app.title, "微信")
-        XCTAssertEqual(app.action, "点击启动")
+        let app = RingCenter.text(for: .app("微信"))
+        XCTAssertNil(app.title, "选中应用时中心完全空白：不显示名字")
+        XCTAssertNil(app.action, "选中应用时中心完全空白：不显示提示")
 
-        let empty = RingCenter.text(for: .emptySlot, launches: false)
+        let empty = RingCenter.text(for: .emptySlot)
         XCTAssertEqual(empty.title, "空位")
         XCTAssertEqual(empty.action, "点击取消")
 
-        let idle = RingCenter.text(for: .none, launches: false)
+        let idle = RingCenter.text(for: .none)
         XCTAssertNil(idle.title)
         XCTAssertNil(idle.action)
     }
@@ -536,10 +536,9 @@ final class RingCenterTests: XCTestCase {
     /// either entry, puts "松开取消" or "Esc 取消" there again.
     func testCentreNeverShowsACancelHint() {
         let decisions = [
-            RingCenter.text(for: .none, launches: false),
-            RingCenter.text(for: .emptySlot, launches: false),
-            RingCenter.text(for: .app("微信"), launches: true),
-            RingCenter.text(for: .app("微信"), launches: false)
+            RingCenter.text(for: .none),
+            RingCenter.text(for: .emptySlot),
+            RingCenter.text(for: .app("微信"))
         ]
         for copy in decisions {
             XCTAssertNotEqual(copy.title, "松开取消")
@@ -549,14 +548,6 @@ final class RingCenterTests: XCTestCase {
         }
     }
 
-    /// The name follows the hover direction, the verb follows what the click really does:
-    /// a gap inside the ring names the app but still says it cancels.
-    func testCentreTextDoesNotPromiseALaunchForAnInRingGap() {
-        let gap = RingCenter.text(for: .app("微信"), launches: false)
-        XCTAssertEqual(gap.title, "微信")
-        XCTAssertEqual(gap.action, "点击取消")
-        XCTAssertNotEqual(gap.action, RingCenter.text(for: .app("微信"), launches: true).action)
-    }
 }
 
 final class ConfigurationTests: XCTestCase {
@@ -987,15 +978,15 @@ final class RingPointerTests: XCTestCase {
         let outside = RingPointer.decide(outsidePlate(22.5, of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
         XCTAssertEqual(outside.slot, 1)
         let outsideText = RingCenter.text(for: outside, names: names, filled: filled)
-        XCTAssertEqual(outsideText.title, "OpenBot")
-        XCTAssertEqual(outsideText.action, "点击启动")
+        XCTAssertNil(outsideText.title, "选中应用时中心不显示名字")
+        XCTAssertNil(outsideText.action, "选中应用时中心不显示提示")
 
         let gap = RingPointer.decide(insidePlate(22.5, of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
         XCTAssertEqual(gap.slot, 1, "间隙仍要按角度高亮")
         XCTAssertEqual(gap.action, .cancel, "间隙点击仍是取消")
         let gapText = RingCenter.text(for: gap, names: names, filled: filled)
-        XCTAssertEqual(gapText.title, "OpenBot", "间隙仍要显示该方向真实应用名")
-        XCTAssertEqual(gapText.action, "点击取消")
+        XCTAssertNil(gapText.title, "间隙也算选中该应用，中心同样留空")
+        XCTAssertNil(gapText.action)
 
         let centre = RingPointer.decide(RingPointer.ringCenter(of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
         let centreText = RingCenter.text(for: centre, names: names, filled: filled)
@@ -1677,14 +1668,15 @@ final class HoldToLaunchTests: XCTestCase {
         }
     }
 
-    func testGestureCentreCopyNeverPromisesAClick() {
+    /// A chosen app leaves the middle empty in the gesture entry too.
+    func testGestureCentreStaysEmptyForAChosenApp() {
         let ring = geometry()
 
         let icon = ring.iconFrames[1]
         let onApp = hold(world(CGPoint(x: icon.midX, y: icon.midY), in: ring), ring: ring)
         let appText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch)
-        XCTAssertEqual(appText.title, "B")
-        XCTAssertNil(appText.action, "选中应用时只有居中的名字，不再挂「松开启动」第二行")
+        XCTAssertNil(appText.title, "选中应用时中心不显示名字")
+        XCTAssertNil(appText.action, "选中应用时中心不显示提示")
 
         var withEmpty = allFilled
         withEmpty[4] = false
@@ -1700,15 +1692,16 @@ final class HoldToLaunchTests: XCTestCase {
         XCTAssertNil(blankText.action)
     }
 
-    /// The menu entry keeps its click wording and its angular rule.
-    func testAngularModeKeepsItsClickCopyAndRule() {
+    /// The menu entry leaves the middle empty for a chosen app as well, and its angular rule
+    /// still decides what a click launches.
+    func testAngularModeLeavesAChosenAppEmpty() {
         let ring = geometry()
         let outside = CGPoint(x: 15, y: 960)
         let decision = RingPointer.decide(outside, activeScreenFrame: screen, geometry: ring, filled: allFilled)
-        guard case .launch(let index) = decision.action else { return XCTFail("菜单入口应可按角度启动") }
+        guard case .launch = decision.action else { return XCTFail("菜单入口应可按角度启动") }
         let text = RingCenter.text(for: decision, names: names, filled: allFilled, mode: .angularClick)
-        XCTAssertEqual(text.title, names[index])
-        XCTAssertEqual(text.action, "点击启动")
+        XCTAssertNil(text.title, "菜单入口选中应用时中心也不显示名字")
+        XCTAssertNil(text.action, "菜单入口选中应用时中心也不显示提示")
     }
 
     /// 3–8 slots must all keep the gesture's icon hit and the angular rule working.
@@ -2739,5 +2732,34 @@ final class BundleOnDiskTests: XCTestCase {
         XCTAssertEqual(current.executable, launched.executable)
         XCTAssertNotEqual(current.plist, launched.plist)
         XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: current), .replacedSinceLaunch)
+    }
+}
+
+final class StatusItemRightClickTests: XCTestCase {
+    /// The menu button's frame, as measured on a real status item button.
+    private let buttonBounds = CGRect(x: 0, y: 0, width: 32, height: 29)
+
+    func testARightClickOnTheButtonBelongsToTheStatusItem() {
+        XCTAssertTrue(StatusItemRightClick.belongs(windowMatches: true,
+                                                   point: CGPoint(x: 16, y: 14),
+                                                   buttonBounds: buttonBounds))
+        XCTAssertTrue(StatusItemRightClick.belongs(windowMatches: true,
+                                                   point: CGPoint(x: 0, y: 0),
+                                                   buttonBounds: buttonBounds))
+    }
+
+    func testARightClickAnywhereElseKeepsItsNormalPath() {
+        XCTAssertFalse(StatusItemRightClick.belongs(windowMatches: true,
+                                                    point: CGPoint(x: 33, y: 14),
+                                                    buttonBounds: buttonBounds),
+                       "图标右侧属于别的状态项")
+        XCTAssertFalse(StatusItemRightClick.belongs(windowMatches: true,
+                                                    point: CGPoint(x: 16, y: -1),
+                                                    buttonBounds: buttonBounds),
+                       "菜单栏上的其他位置不是 Ring 的按钮")
+        XCTAssertFalse(StatusItemRightClick.belongs(windowMatches: false,
+                                                    point: CGPoint(x: 16, y: 14),
+                                                    buttonBounds: buttonBounds),
+                       "别的窗口里的右键必须原样透传")
     }
 }

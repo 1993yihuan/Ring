@@ -17,8 +17,8 @@ public enum RingHover: Sendable, Equatable {
     case app(String)
 }
 
-/// The middle of the ring. The name lives here instead of under the ring, so a hovered
-/// icon never needs a label strip and the panel stays a square.
+/// What the middle of the ring says, if anything. A chosen app leaves it empty; only an
+/// empty slot still has copy of its own.
 public struct RingCenterText: Sendable, Equatable {
     public var title: String?
     public var action: String?
@@ -41,15 +41,13 @@ public enum RingCenter {
         return name.isEmpty ? .none : .app(name)
     }
 
-    /// The copy for a whole decision: the name follows the highlighted direction, the
-    /// verb follows what the click really does. One mapping, so the panel cannot invent a
-    /// second interpretation of the same decision.
+    /// The copy for a whole decision: one mapping from the slot to what the middle says, so
+    /// the panel cannot invent a second interpretation of the same decision.
     public static func text(for decision: RingPointerDecision,
                             names: [String],
                             filled: [Bool]) -> RingCenterText {
         // Reuse the one index → RingHover mapping instead of repeating its rules.
-        return text(for: hover(index: decision.slot, names: names, filled: filled),
-                    launches: decision.launches)
+        return text(for: hover(index: decision.slot, names: names, filled: filled))
     }
 
     /// Mode-aware copy: the gesture entry has no click, so it must not promise one.
@@ -68,24 +66,21 @@ public enum RingCenter {
                 return RingCenterText(title: nil, action: nil)
             }
             if !filled[slot] { return RingCenterText(title: "空位", action: nil) }
-            // The name is the whole message here: the release is what the user is already
-            // doing, so a second line under the name would only repeat the gesture.
-            let name = names[slot]
-            return RingCenterText(title: name.isEmpty ? nil : name, action: nil)
+            // A chosen app says nothing at all in the middle.
+            return RingCenterText(title: nil, action: nil)
         }
     }
 
-    /// `launches` is the click outcome, not the hover direction: a gap inside the drawn
-    /// ring highlights its direction but still cancels, and the centre must say so instead
-    /// of promising a launch.
-    public static func text(for hover: RingHover, launches: Bool) -> RingCenterText {
+    /// A chosen app leaves the middle completely empty in both entries: no name, no verb.
+    /// Only an empty slot or no selection says anything at all.
+    public static func text(for hover: RingHover) -> RingCenterText {
         switch hover {
         case .none:
             return RingCenterText(title: nil, action: nil)
         case .emptySlot:
             return RingCenterText(title: "空位", action: "点击取消")
-        case .app(let name):
-            return RingCenterText(title: name, action: launches ? "点击启动" : "点击取消")
+        case .app:
+            return RingCenterText(title: nil, action: nil)
         }
     }
 }

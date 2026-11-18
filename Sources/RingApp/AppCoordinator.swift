@@ -28,6 +28,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// Held so the right-click menu outlives the button's property, and so the listener
     /// title can still be updated while the menu is not owned by the status item.
     private var statusMenu: NSMenu?
+    /// Matches a right click on the status button before it is dispatched. A status item's
+    /// button hands a right click to no menu of its own, so Ring has to open it here.
+    private var statusRightClickMonitor: Any?
     private var store: SlotStore?
     /// The panel's own entrance and exit, with the generation that tells an old completion
     /// from the round now on screen.
@@ -81,6 +84,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        if let statusRightClickMonitor { NSEvent.removeMonitor(statusRightClickMonitor) }
+        statusRightClickMonitor = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
     }
 
@@ -115,7 +120,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         monitor.onTick = { [weak self] time in self?.handleTick(time) }
         monitor.onHealthChange = { [weak self] health in self?.healthChanged(health) }
         if !monitor.start() {
-            NSLog("Ring: 全局监听不可用，可用菜单栏手动打开环形")
+            NSLog("Ring: 全局监听不可用")
         }
         refreshMonitorStatus()
     }
@@ -531,62 +536,65 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "circle.dashed", accessibilityDescription: "Ring")
         let menu = NSMenu()
-        menu.addItem(NSMenuItem(title: "手动打开环形（布局验证）", action: #selector(manualShow), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
-        menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "重试全局监听", action: #selector(retryMonitor), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 Ring", action: #selector(quit), keyEquivalent: "q"))
         for menuItem in menu.items where menuItem.action != nil {
             menuItem.target = self
         }
         // A status item with a menu never sends its button's action: the system shows the
-        // menu on either click. The menu is attached to the button as an ordinary view menu
-        // instead, so a right click pops it up at the icon and a left click opens settings.
+        // menu on either click. The button is therefore left without a menu, its action is
+        // the left click, and the right click is opened by the match below. Measured against
+        // a real status button: attaching the menu to the button as a view menu, or adding
+        // .rightMouseUp to sendAction(on:), opens nothing on a right click.
         item.button?.target = self
         item.button?.action = #selector(statusItemLeftClick)
         item.button?.sendAction(on: [.leftMouseUp])
-        item.button?.menu = menu
         statusMenu = menu
         statusItem = item
+        installStatusRightClickMonitor()
         refreshMonitorStatus()
     }
 
-    private func refreshMonitorStatus() {
-        let menu = statusMenu
-        if let item = menu?.items.first(where: { $0.title.hasPrefix("手动打开环形") }) {
-            item.title = monitor.isRunning ? "手动打开环形（布局验证）" : "手动打开环形（监听不可用）"
+    /// Only this process's right clicks, only in the status bar's own window, only inside the
+    /// button: anything else is returned unchanged and keeps its normal path.
+    private func installStatusRightClickMonitor() {
+        guard statusRightClickMonitor == nil else { return }
+        statusRightClickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown]) { [weak self] event in
+            // The window is bound here, not compared later: two nil windows are equal, so a
+            // button that is not attached to a status bar window, or an event that has no
+            // window, would otherwise be taken for the button's own click.
+            guard let self,
+                  let button = self.statusItem?.button,
+                  let statusWindow = button.window,
+                  let menu = self.statusMenu
+            else { return event }
+            let point = button.convert(event.locationInWindow, from: nil)
+            guard StatusItemRightClick.belongs(windowMatches: event.window === statusWindow,
+                                               point: point,
+                                               buttonBounds: button.bounds)
+            else { return event }
+            // The real flip decides which edge is the bottom: a flipped button grows down, so
+            // its maxY is the edge the menu opens under.
+            let menuEdge = button.isFlipped ? button.bounds.maxY : button.bounds.minY
+            // Menu tracking runs its own loop: the click must not continue to the button, or
+            // the button would see it again while the menu is open.
+            menu.popUp(positioning: nil, at: NSPoint(x: 0, y: menuEdge), in: button)
+            return nil
         }
+    }
+
+    /// The menu no longer carries a listener entry, so its tool tip is the only place the
+    /// listener's health is stated.
+    private func refreshMonitorStatus() {
         statusItem?.button?.toolTip = monitor.isRunning
             ? "Ring：Option 监听运行中"
-            : "Ring：Option 监听不可用，可重试监听"
+            : "Ring：Option 监听不可用"
     }
 
     /// The left click is the button's only action; the menu is the right click's.
     @objc private func statusItemLeftClick() {
         openSettings()
-    }
-
-    @objc private func manualShow() {
-        if session.isVisible {
-            cancelRing()
-        } else {
-            showRing(mode: .angularClick)
-        }
-    }
-
-
-    @objc private func retryMonitor() {
-        retryListener()
-    }
-
-    /// A manual retry never interrupts an already running sampler.
-    private func retryListener() {
-        if !monitor.isRunning {
-            recognizer.reset()
-            cancelRing()
-            installMonitor()
-        }
     }
 
     @objc private func openSettings() {

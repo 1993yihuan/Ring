@@ -213,8 +213,9 @@ final class RingView: NSView {
         drawCentre(geometry: geometry)
     }
 
-    /// The hovered name sits on the exact middle of the hole and nothing moves it there;
-    /// the verb hangs below it. No plate behind them: the hole stays see-through.
+    /// A chosen app leaves the middle of the hole empty: no icon, no name, no verb. Only an
+    /// empty slot still has copy, hanging where it always did; no selection says nothing. No
+    /// plate behind it: the hole stays see-through.
     private func drawCentre(geometry: RingGeometry) {
         guard let decision else { return }
         let centre = CGPoint(x: bounds.midX, y: bounds.midY)
