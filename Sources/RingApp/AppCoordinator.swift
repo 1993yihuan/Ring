@@ -25,6 +25,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var settingsModel: SettingsModel?
     private var statusItem: NSStatusItem?
+    /// Held so the right-click menu outlives the button's property, and so the listener
+    /// title can still be updated while the menu is not owned by the status item.
+    private var statusMenu: NSMenu?
     private var store: SlotStore?
     /// The panel's own entrance and exit, with the generation that tells an old completion
     /// from the round now on screen.
@@ -537,19 +540,31 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         for menuItem in menu.items where menuItem.action != nil {
             menuItem.target = self
         }
-        item.menu = menu
+        // A status item with a menu never sends its button's action: the system shows the
+        // menu on either click. The menu is attached to the button as an ordinary view menu
+        // instead, so a right click pops it up at the icon and a left click opens settings.
+        item.button?.target = self
+        item.button?.action = #selector(statusItemLeftClick)
+        item.button?.sendAction(on: [.leftMouseUp])
+        item.button?.menu = menu
+        statusMenu = menu
         statusItem = item
         refreshMonitorStatus()
     }
 
     private func refreshMonitorStatus() {
-        let menu = statusItem?.menu
+        let menu = statusMenu
         if let item = menu?.items.first(where: { $0.title.hasPrefix("手动打开环形") }) {
             item.title = monitor.isRunning ? "手动打开环形（布局验证）" : "手动打开环形（监听不可用）"
         }
         statusItem?.button?.toolTip = monitor.isRunning
             ? "Ring：Option 监听运行中"
             : "Ring：Option 监听不可用，可重试监听"
+    }
+
+    /// The left click is the button's only action; the menu is the right click's.
+    @objc private func statusItemLeftClick() {
+        openSettings()
     }
 
     @objc private func manualShow() {
@@ -623,6 +638,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             settingsWindow = window
         }
         NSApp.activate(ignoringOtherApps: true)
+        // A minimised window would stay in the Dock: ordering it front is not enough.
+        if settingsWindow?.isMiniaturized == true {
+            settingsWindow?.deminiaturize(nil)
+        }
         settingsWindow?.makeKeyAndOrderFront(nil)
     }
 

@@ -68,8 +68,10 @@ public enum RingCenter {
                 return RingCenterText(title: nil, action: nil)
             }
             if !filled[slot] { return RingCenterText(title: "空位", action: nil) }
+            // The name is the whole message here: the release is what the user is already
+            // doing, so a second line under the name would only repeat the gesture.
             let name = names[slot]
-            return RingCenterText(title: name.isEmpty ? nil : name, action: "松开启动")
+            return RingCenterText(title: name.isEmpty ? nil : name, action: nil)
         }
     }
 

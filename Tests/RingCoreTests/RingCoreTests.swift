@@ -1684,7 +1684,7 @@ final class HoldToLaunchTests: XCTestCase {
         let onApp = hold(world(CGPoint(x: icon.midX, y: icon.midY), in: ring), ring: ring)
         let appText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch)
         XCTAssertEqual(appText.title, "B")
-        XCTAssertEqual(appText.action, "松开启动")
+        XCTAssertNil(appText.action, "选中应用时只有居中的名字，不再挂「松开启动」第二行")
 
         var withEmpty = allFilled
         withEmpty[4] = false
