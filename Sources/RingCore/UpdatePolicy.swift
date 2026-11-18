@@ -115,9 +115,6 @@ public enum UpdateFailure: Error, Sendable, Equatable, CustomStringConvertible {
     /// The bundle to be replaced is not the one this process started from: it was replaced or
     /// rebuilt under the running copy, so nothing is signed and nothing is swapped.
     case targetChanged(String)
-    /// The installed app and the incoming package disagree about the signing identity in a
-    /// way that would silently change privacy permissions, so nothing is replaced.
-    case migrationRequired(String)
 
     public var description: String {
         switch self {
@@ -139,8 +136,6 @@ public enum UpdateFailure: Error, Sendable, Equatable, CustomStringConvertible {
             return "安装失败：\(reason)"
         case .targetChanged(let reason):
             return "要替换的 Ring.app 与正在运行的不是同一份：\(reason)"
-        case .migrationRequired(let reason):
-            return "需要手动迁移：\(reason)"
         }
     }
 }

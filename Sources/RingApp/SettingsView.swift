@@ -369,90 +369,6 @@ private struct SlotRow: View {
     }
 }
 
-// MARK: - Permission card
-
-/// The input-monitoring card. It used to sit at the bottom of the ring page; it now lives on the
-/// permissions page, unchanged, so both places would show the same state if it ever moved again.
-struct InputPermissionCard: View {
-    @ObservedObject var model: SettingsModel
-
-    private var granted: Bool { model.status.access == .granted }
-
-    var body: some View {
-        SettingsCard(padding: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    Image(systemName: granted ? "checkmark.shield" : "exclamationmark.shield")
-                        .font(.system(size: 13))
-                        .foregroundStyle(granted ? Color.secondary : Color.orange)
-                    Text("输入监控权限")
-                        .font(.system(size: 13, weight: .semibold))
-                    statusPill
-                    Spacer(minLength: 8)
-                    Button("检查权限") { model.refreshPermission() }
-                        .font(.system(size: 12))
-                        .help("重新读取系统当前的输入监控授权状态")
-                    // Granting is the only route out of "not granted"; once granted the
-                    // card keeps the check and the listener recovery instead.
-                    if !granted {
-                        Button("请求权限") { model.requestPermission() }
-                            .font(.system(size: 12))
-                    }
-                }
-                Text(model.status.detail)
-                    .font(.system(size: 12))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if model.status.showsOpenSettings || model.status.showsRetryListener {
-                    HStack(spacing: 8) {
-                        if model.status.showsOpenSettings {
-                            Button("打开系统设置（输入监控）") { model.openInputMonitoringSettings() }
-                                .font(.system(size: 12))
-                        }
-                        if model.status.showsRetryListener {
-                            Button("重试监听") { model.retryListener() }
-                                .font(.system(size: 12))
-                        }
-                        Spacer(minLength: 0)
-                    }
-                }
-                if let message = model.permissionMessage {
-                    Text(message)
-                        .font(.system(size: 12))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-        }
-    }
-
-    /// Access and listener health in one word, so "already granted but the tap died"
-    /// never reads as "no permission".
-    private var statusPill: some View {
-        let label: String
-        let color: Color
-        switch (model.status.access, model.status.listener) {
-        case (.granted, .running):
-            label = "已开启"
-            color = .secondary
-        case (.granted, _):
-            label = "已开启，监听未运行"
-            color = .orange
-        case (.notGranted, _):
-            label = "未开启"
-            color = .orange
-        }
-        return Text(label)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundStyle(color)
-            .lineLimit(1)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .background(Capsule().fill(color.opacity(0.14)))
-            // The longest state ("已开启，监听未运行") must not be squeezed by the buttons.
-            .fixedSize(horizontal: true, vertical: false)
-    }
-}
 
 // MARK: - Footer
 
@@ -527,60 +443,25 @@ final class SettingsModel: ObservableObject {
     /// saves, because the field is what the page shows.
     @Published var entranceDurationText: String
     @Published var entranceDurationError: String?
-    @Published var status: PermissionStatus
-    @Published var permissionMessage: String?
     @Published var lastError: String?
 
     private let store: SlotStore
     private var config: LauncherConfiguration
     var onConfigChange: ((LauncherConfiguration) -> Void)?
-    var onRequestPermission: (() -> Void)?
-    var onRefreshPermission: (() -> Void)?
-    var onRetryListener: (() -> Void)?
-    var onOpenInputMonitoringSettings: (() -> Void)?
 
-    init(config: LauncherConfiguration, store: SlotStore, status: PermissionStatus) {
+    init(config: LauncherConfiguration, store: SlotStore) {
         self.config = config.normalized()
         self.slots = self.config.slots
         self.visibleSlotCount = self.config.visibleSlotCount
         self.entranceDurationMilliseconds = self.config.entranceDurationMilliseconds
         self.entranceDurationText = String(self.config.entranceDurationMilliseconds)
         self.store = store
-        self.status = status
     }
 
     var visibleSlots: [Slot] {
         Array(slots.prefix(visibleSlotCount))
     }
 
-    /// A state change makes the previous result message stale: showing "granted and
-    /// running" next to an old "no permission" line would contradict itself.
-    func apply(status newStatus: PermissionStatus) {
-        if newStatus != status {
-            permissionMessage = nil
-        }
-        status = newStatus
-    }
-
-    /// Every explicit permission action answers in words, including the case where the
-    /// system grants nothing and shows no dialog.
-    func report(requestResult: PermissionStatus, accessAfterRequest: ListenAccess) {
-        status = requestResult
-        permissionMessage = PermissionFeedback.requestMessage(accessAfterRequest: accessAfterRequest,
-                                                              status: requestResult)
-    }
-
-    func report(retryResult: PermissionStatus, listenerWasRunning: Bool) {
-        status = retryResult
-        permissionMessage = PermissionFeedback.retryMessage(status: retryResult,
-                                                            wasRunning: listenerWasRunning)
-    }
-
-    func report(openSettingsFailed: Bool) {
-        if openSettingsFailed {
-            permissionMessage = PermissionFeedback.settingsOpenFailed
-        }
-    }
 
     /// Changes the visible count only; nothing is deleted, so raising it again restores
     /// the same apps, ids and order.
@@ -653,22 +534,6 @@ final class SettingsModel: ObservableObject {
 
     func save() {
         commit()
-    }
-
-    func refreshPermission() {
-        onRefreshPermission?()
-    }
-
-    func requestPermission() {
-        onRequestPermission?()
-    }
-
-    func retryListener() {
-        onRetryListener?()
-    }
-
-    func openInputMonitoringSettings() {
-        onOpenInputMonitoringSettings?()
     }
 
     func revealConfiguration() {

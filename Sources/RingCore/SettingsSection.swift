@@ -1,12 +1,9 @@
 import Foundation
 
-/// The five pages of the settings window, in the order the sidebar lists them. The ring page
-/// is the one that exists today; the rest are placeholders until their own work lands, so this
-/// is the only place that says what a page is called and which symbol it wears.
+/// Sidebar sections for launcher configuration and updates.
 public enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
     case ring
     case triggers
-    case permissions
     case general
     case about
 
@@ -16,7 +13,6 @@ public enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ring: return "环形设置"
         case .triggers: return "触发与手势"
-        case .permissions: return "权限与安全"
         case .general: return "通用设置"
         case .about: return "关于"
         }
@@ -26,7 +22,6 @@ public enum SettingsSection: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .ring: return "circle.dashed"
         case .triggers: return "keyboard"
-        case .permissions: return "shield.lefthalf.filled"
         case .general: return "gearshape"
         case .about: return "info.circle"
         }

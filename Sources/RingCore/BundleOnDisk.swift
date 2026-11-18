@@ -25,9 +25,8 @@ public enum BundleOnDisk {
         return app.appendingPathComponent("Contents/MacOS/\(name)")
     }
 
-    /// The two stamps the install helper compares before it swaps: the executable and the
-    /// Info.plist its policy came from. A rewrite of either changes the text, so a bundle whose
-    /// policy keys were added or removed while the helper waited is refused as well.
+    /// The executable and Info.plist must remain unchanged until the helper swaps
+    /// the verified candidate. Both receive independent on-disk stamps.
     public static func helperBaseline(of app: URL) -> String? {
         guard let executable = BundleIdentity.executableStamp(of: app),
               let plist = stamp(of: app.appendingPathComponent("Contents/Info.plist"))
@@ -56,25 +55,24 @@ public enum BundleOnDisk {
     }
 }
 
-/// What one app bundle looks like at this instant: the file identity of its executable and the
-/// signing policy it states. Two identities differ when the bundle was replaced, rebuilt, or had
-/// its policy keys written, even when the version string did not change.
+/// Snapshot of the bundle's executable and Info.plist; both must remain stable
+/// throughout an update, even when the version number has not changed.
 public struct BundleIdentity: Equatable, Sendable {
-    /// Exactly the text `stat -f '%d:%i:%z:%m'` prints for the executable, so the install helper
-    /// compares the same characters before it replaces anything.
     public let executable: String
-    public let policy: LocalSigningPolicyState
+    public let plist: String
 
-    public init(executable: String, policy: LocalSigningPolicyState) {
+    public init(executable: String, plist: String) {
         self.executable = executable
-        self.policy = policy
+        self.plist = plist
     }
 
-    /// nil when the executable or its metadata cannot be read: sameness is then unproven.
+    /// If either file cannot be read, identity is unknown: refuse to update.
     public init?(app: URL) {
-        guard let executable = Self.executableStamp(of: app) else { return nil }
+        guard let executable = Self.executableStamp(of: app),
+              let plist = BundleOnDisk.stamp(of: app.appendingPathComponent("Contents/Info.plist"))
+        else { return nil }
         self.executable = executable
-        self.policy = LocalSigningPolicyState.state(info: BundleOnDisk.info(of: app))
+        self.plist = plist
     }
 
     public static func executableStamp(of app: URL) -> String? {
@@ -99,9 +97,8 @@ public enum UpdateTargetCheck {
 
     /// The refusal for a target that is not the bundle this process started from; nil when it is.
     ///
-    /// Signing or replacing a different bundle writes over a version nobody chose, so the answer
-    /// is to stop and ask for a restart. This is a file identity check, not a signing policy
-    /// judgment: an adhoc install the user never touched still passes.
+    /// This is a file identity check, not a code-signing decision; the verified
+    /// downloaded package still goes through the existing checksum checks.
     public static func failure(launched: BundleIdentity?, current: BundleIdentity?) -> UpdateFailure? {
         switch verdict(launched: launched, current: current) {
         case .sameBundle:

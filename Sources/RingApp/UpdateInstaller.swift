@@ -318,50 +318,14 @@ enum UpdateInstaller {
             return .failure(.installFailed("暂存的新版本签名自检没有通过：\(verify.output)"))
         }
 
-        // A locally signed build states its identity policy in its own Info.plist. The
-        // installed app decides what this Mac accepts; the package's keys are only used to
-        // notice that installing it would change the identity behind the user's permission.
-        let targetPolicy = LocalSigningPolicyState.state(info: BundleOnDisk.info(of: target))
-        let incomingPolicy = LocalSigningPolicyState.state(info: BundleOnDisk.info(of: prepared.app))
-        switch LocalSigningGate.decide(target: targetPolicy, incoming: incomingPolicy) {
-        case .publicUpdate:
-            break
-        case .invalidPolicy(let reason):
-            discardStage()
-            return .failure(.installFailed(reason))
-        case .bootstrapRequired:
-            discardStage()
-            return .failure(.migrationRequired("已安装的 Ring 不是本机身份签名，新包是；这会改变隐私授权身份，更新器不会自动替换。"))
-        case .localResign(let policy):
-            // The installed app is checked first: the private key is only touched once the
-            // target really is a locally signed bundle that matches its own stated policy.
-            if case .failure(let failure) = LocalResign.verifyInstalledTarget(target, policy: policy, scratch: stage) {
-                discardStage()
-                return .failure(failure)
-            }
-            if case .failure(let failure) = LocalResign.resign(stagedApp, policy: policy, scratch: stage) {
-                discardStage()
-                return .failure(failure)
-            }
-            switch LocalResign.requireMutualCompatibility(target: target, staged: stagedApp) {
-            case .failure(let failure):
-                discardStage()
-                return .failure(failure)
-            case .success:
-                break
-            }
-        }
-
-        // The target is compared against the launch snapshot a second time, right before the
-        // helper takes over. The first check ran before the copy, the verify and any resigning;
-        // a bundle swapped in during those seconds must not become the reference itself.
+        // Compare the target against the launch snapshot again, immediately before
+        // preparing the helper. Refuse if either executable or plist has changed.
         if let failure = UpdateTargetCheck.failure(launched: launchedFrom,
                                                    current: BundleIdentity(app: target)) {
             discardStage()
             return .failure(failure)
         }
-        // Described from disk at the last moment, with the plist the policy came from, so the
-        // helper can also refuse a target whose policy keys were edited while it waited.
+        // The helper also verifies both file stamps immediately before replacement.
         guard let targetBaseline = BundleOnDisk.helperBaseline(of: target),
               let stagedBaseline = BundleOnDisk.helperBaseline(of: stagedApp) else {
             discardStage()

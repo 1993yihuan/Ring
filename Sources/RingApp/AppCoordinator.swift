@@ -4,7 +4,7 @@ import RingCore
 import SwiftUI
 
 final class AppCoordinator: NSObject, NSApplicationDelegate {
-    private let monitor = GlobalOptionMonitor()
+    private let monitor = OptionPollingMonitor()
     private let launcher = Launcher()
     private var recognizer = OptionDoubleTapRecognizer()
     private let session = RingSession()
@@ -52,8 +52,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                                                        supportDirectory: supportDirectory)
         let store = SlotStore(directory: dataDirectory)
         self.store = store
-        // One line per changed listen outcome: enough to tell "no permission" from
-        // "authorised but the tap did not start", with no input content.
+        // Only listener state is logged; no keyboard content is recorded.
         monitor.diagnosticFile = dataDirectory.appendingPathComponent("listen-diagnostics.log")
 
         do {
@@ -71,17 +70,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             object: nil)
     }
 
-    /// Coming back from System Settings refreshes the state and retries the listener once
-    /// access exists. Nothing happens when it is already running, so the tap is not
-    /// reinstalled on every activation.
+    /// Restart a stopped sampler on activation without asking for permission.
     func applicationDidBecomeActive(_ notification: Notification) {
-        refreshPermissionStatus()
-        let followUp = PermissionFeedback.followUp(access: currentStatus.access,
-                                                   listenerRunning: monitor.isRunning,
-                                                   windowVisible: settingsWindowVisible)
-        if followUp.reinstallMonitor {
-            installMonitor()
-        }
+        refreshMonitorStatus()
+        if !monitor.isRunning { installMonitor() }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -115,7 +107,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func installMonitor() {
         monitor.onEvent = { [weak self] event, point in self?.handle(event, at: point) }
-        monitor.onEscape = { [weak self] in self?.cancelRing() }
         monitor.onMouseDown = { [weak self] point in self?.handleMouseDown(at: point) }
         monitor.onPointerMove = { [weak self] point in self?.pointerMoved(to: point, from: .global) }
         monitor.onTick = { [weak self] time in self?.handleTick(time) }
@@ -123,7 +114,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         if !monitor.start() {
             NSLog("Ring: 全局监听不可用，可用菜单栏手动打开环形")
         }
-        refreshPermissionStatus()
+        refreshMonitorStatus()
     }
 
     private func handle(_ event: InputEvent, at point: CGPoint) {
@@ -187,17 +178,10 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func healthChanged(_ health: GlobalOptionMonitor.Health) {
-        refreshPermissionStatus()
-        if health == .tapDisabled {
-            statusItem?.button?.toolTip = "Ring：全局监听已被系统停用，可在设置中重试"
-        }
-        // The tap is the only global source for Esc and the Option release. Without it the
-        // overlay's own click is the remaining way out, so close now instead of leaving a
-        // ring that can neither launch nor be dismissed from the keyboard.
-        if health != .running, session.isVisible {
-            cancelRing()
-        }
+    private func healthChanged(_ health: OptionPollingMonitor.Health) {
+        refreshMonitorStatus()
+        // Never leave a gesture waiting for an unseen Option release.
+        if health != .running, session.isVisible { cancelRing() }
     }
 
     // MARK: - Ring panel
@@ -547,8 +531,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem(title: "手动打开环形（布局验证）", action: #selector(manualShow), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "设置…", action: #selector(openSettings), keyEquivalent: ","))
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "请求输入监控权限", action: #selector(requestPermission), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "打开系统设置（输入监控）", action: #selector(openInputMonitoringSettingsFromMenu), keyEquivalent: ""))
         menu.addItem(NSMenuItem(title: "重试全局监听", action: #selector(retryMonitor), keyEquivalent: ""))
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "退出 Ring", action: #selector(quit), keyEquivalent: "q"))
@@ -557,28 +539,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
         item.menu = menu
         statusItem = item
-        refreshPermissionStatus()
+        refreshMonitorStatus()
     }
 
-    /// One place turns API state plus listener health into what the user sees.
-    private var currentStatus: PermissionStatus {
-        let listener: ListenerHealth
-        switch monitor.health {
-        case .running: listener = .running
-        case .stopped: listener = .stopped
-        case .needsPermission, .tapUnavailable, .tapDisabled: listener = .failed
-        }
-        return PermissionStatus(access: InputMonitorPermission.listenAccess, listener: listener)
-    }
-
-    private func refreshPermissionStatus() {
-        let status = currentStatus
+    private func refreshMonitorStatus() {
         let menu = statusItem?.menu
-        if let healthItem = menu?.items.first(where: { $0.title.hasPrefix("手动打开环形") }) {
-            healthItem.title = monitor.isRunning ? "手动打开环形（布局验证）" : "手动打开环形（监听不可用）"
+        if let item = menu?.items.first(where: { $0.title.hasPrefix("手动打开环形") }) {
+            item.title = monitor.isRunning ? "手动打开环形（布局验证）" : "手动打开环形（监听不可用）"
         }
-        statusItem?.button?.toolTip = status.headline
-        settingsModel?.apply(status: status)
+        statusItem?.button?.toolTip = monitor.isRunning
+            ? "Ring：Option 监听运行中"
+            : "Ring：Option 监听不可用，可重试监听"
     }
 
     @objc private func manualShow() {
@@ -589,55 +560,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
     }
 
+
     @objc private func retryMonitor() {
         retryListener()
     }
 
-    /// Retrying never grants access, and never tears down a tap that is already running.
+    /// A manual retry never interrupts an already running sampler.
     private func retryListener() {
-        recognizer.reset()
-        session.cancel()
-        hidePanel()
-        let wasRunning = monitor.isRunning
-        if !wasRunning {
+        if !monitor.isRunning {
+            recognizer.reset()
+            cancelRing()
             installMonitor()
-        }
-        settingsModel?.report(retryResult: currentStatus, listenerWasRunning: wasRunning)
-    }
-
-    /// Explicit user action. Always produces a visible answer: granted, still missing,
-    /// or the pane could not be opened.
-    @objc private func requestPermission() {
-        let access = InputMonitorPermission.requestFromUserAction()
-        let followUp = PermissionFeedback.followUp(access: access,
-                                                   listenerRunning: monitor.isRunning,
-                                                   windowVisible: settingsWindowVisible)
-        // Never rebuild a tap that is already running; only a missing one needs starting.
-        if followUp.reinstallMonitor {
-            installMonitor()
-        }
-        refreshPermissionStatus()
-        // A closed window keeps its model, so checking the model alone would hide the
-        // result. The choice is made in RingCore where it is tested.
-        if followUp.showSettingsWindow {
-            openSettings()
-        }
-        settingsModel?.report(requestResult: currentStatus, accessAfterRequest: access)
-    }
-
-    private var settingsWindowVisible: Bool {
-        guard let window = settingsWindow else { return false }
-        return window.isVisible
-    }
-
-    @objc private func openInputMonitoringSettingsFromMenu() {
-        openInputMonitoringSettings()
-    }
-
-    private func openInputMonitoringSettings() {
-        if !InputMonitorPermission.openInputMonitoringSettings() {
-            settingsModel?.report(openSettingsFailed: true)
-            presentErrorAlert("无法打开系统设置。请手动打开“系统设置 → 隐私与安全性 → 输入监控”，勾选 Ring。")
         }
     }
 
@@ -649,9 +582,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 presentErrorAlert("配置目录未就绪，无法打开设置。请重启 Ring。")
                 return
             }
-            let model = SettingsModel(config: session.config,
-                                     store: store,
-                                     status: currentStatus)
+            let model = SettingsModel(config: session.config, store: store)
             model.onConfigChange = { [weak self] config in
                 guard let self else { return }
                 let countChanged = config.visibleSlotCount != self.session.visibleSlotCount
@@ -660,13 +591,6 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 // that geometry with the new slot list. The next open uses the new value.
                 if countChanged { self.cancelRing() }
             }
-            model.onRefreshPermission = { [weak self] in
-                guard let self else { return }
-                self.refreshPermissionStatus()
-            }
-            model.onRequestPermission = { [weak self] in self?.requestPermission() }
-            model.onRetryListener = { [weak self] in self?.retryListener() }
-            model.onOpenInputMonitoringSettings = { [weak self] in self?.openInputMonitoringSettings() }
             settingsModel = model
             // The page declares its own floor (SettingsWindowGeometry.minimumSize, capped
             // by the screen), so the hosting controller's minimum is a size the user can
@@ -684,7 +608,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             window.title = "Ring 设置"
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
-            // Resizable because the slot list and the permission text both change length;
+            // Resizable because slot lists and application names vary in length;
             // the page scrolls its list instead of growing the window on every message.
             window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
             window.isReleasedWhenClosed = false

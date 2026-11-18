@@ -2,9 +2,8 @@ import AppKit
 import RingCore
 import SwiftUI
 
-/// The settings window: the native sidebar on the left, one page on the right. The ring page is
-/// the page that already exists, embedded as it is; the other four are placeholders until their
-/// own work lands. Nothing here remembers a page: every new window starts on the ring.
+/// Settings are limited to launcher behavior and updates. There is no
+/// keyboard monitoring permission flow or legacy listener configuration.
 struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
     /// The updater outlives the page: switching to another sidebar page and back keeps a running
@@ -73,8 +72,6 @@ struct SettingsRootView: View {
             SettingsView(model: model)
         case .triggers:
             TriggersSettingsPage()
-        case .permissions:
-            PermissionsSettingsPage(model: model)
         case .general:
             GeneralSettingsPage()
         case .about:
@@ -99,24 +96,6 @@ struct TriggersSettingsPage: View {
     var body: some View { SettingsPlaceholderPage() }
 }
 
-/// Permissions: the real input-monitoring card, moved here from the bottom of the ring page. It
-/// is the same view bound to the same SettingsModel, so the state, the buttons and the words are
-/// exactly what the ring page used to show.
-struct PermissionsSettingsPage: View {
-    @ObservedObject var model: SettingsModel
-
-    var body: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                InputPermissionCard(model: model)
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
-    }
-}
 
 struct GeneralSettingsPage: View {
     var body: some View { SettingsPlaceholderPage() }
@@ -143,7 +122,7 @@ struct AboutSettingsPage: View {
                     .font(.system(size: 13))
                     .foregroundStyle(.secondary)
                 content
-                Text("更新只来自 GitHub 上的正式版本，下载后按官方摘要校验。Ring 没有开发者签名，安装后系统可能要求你手动放行新版本。更新完成后 Ring 会重新打开；如果之前勾选过输入监控，可能需要在系统设置里再勾一次。")
+                Text("更新只来自 GitHub 上的正式版本，下载后按官方摘要校验。Ring 没有 Developer ID 签名，安装后系统可能要求手动放行新版本。更新完成后 Ring 会重新打开。")
                     .font(.system(size: 11))
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)

@@ -748,134 +748,6 @@ final class RingSessionTests: XCTestCase {
     }
 }
 
-/// The bug this covers: ticking "request permission" produced no visible answer, and a
-/// listener failure could be mistaken for a missing permission.
-final class PermissionStatusTests: XCTestCase {
-    func testMissingAccessOffersSystemSettingsNotListenerRetry() {
-        let status = PermissionStatus(access: .notGranted, listener: .failed)
-        XCTAssertTrue(status.showsOpenSettings)
-        XCTAssertFalse(status.showsRetryListener)
-        XCTAssertFalse(status.isFullyReady)
-        XCTAssertTrue(status.headline.contains("未授予"))
-        XCTAssertFalse(status.headline.contains("已授予"))
-    }
-
-    func testGrantedButListenerDownOffersRetryAndSaysAccessIsGranted() {
-        let status = PermissionStatus(access: .granted, listener: .failed)
-        XCTAssertTrue(status.showsRetryListener)
-        XCTAssertFalse(status.showsOpenSettings, "retrying cannot fix access that already exists")
-        XCTAssertFalse(status.isFullyReady)
-        XCTAssertTrue(status.headline.contains("已授予"))
-        XCTAssertFalse(status.headline.contains("未授予"), "a listener failure is not a missing permission")
-    }
-
-    func testReadyShowsNoRepairActions() {
-        let status = PermissionStatus(access: .granted, listener: .running)
-        XCTAssertTrue(status.isFullyReady)
-        XCTAssertFalse(status.showsOpenSettings)
-        XCTAssertFalse(status.showsRetryListener)
-    }
-
-    func testRequestWithoutGrantExplainsNextStepInsteadOfSilence() {
-        let status = PermissionStatus(access: .notGranted, listener: .stopped)
-        let message = PermissionFeedback.requestMessage(accessAfterRequest: .notGranted, status: status)
-        XCTAssertFalse(message.isEmpty)
-        XCTAssertTrue(message.contains("系统设置"), "the user needs a concrete next step: \(message)")
-        XCTAssertTrue(message.contains("输入监控"))
-    }
-
-    /// A Bool from the API cannot prove whether the system showed a dialog, so the copy
-    /// must not claim one was absent.
-    func testRequestMessageDoesNotClaimTheSystemShowedNoDialog() {
-        for listener in [ListenerHealth.stopped, .failed, .running] {
-            let status = PermissionStatus(access: .notGranted, listener: listener)
-            let message = PermissionFeedback.requestMessage(accessAfterRequest: .notGranted, status: status)
-            XCTAssertFalse(message.contains("没有弹窗"), "unprovable claim in: \(message)")
-            XCTAssertFalse(message.contains("也没有弹窗"), "unprovable claim in: \(message)")
-            XCTAssertTrue(message.contains("尚未获得"), "should state the fact it does know: \(message)")
-        }
-        // The standing hint on the settings window must stay conditional too.
-        for access in [ListenAccess.notGranted] {
-            let status = PermissionStatus(access: access, listener: .failed)
-            XCTAssertFalse(status.detail.contains("系统没有弹窗"), "unprovable claim in: \(status.detail)")
-            XCTAssertTrue(status.detail.contains("若没有看到系统弹窗"), status.detail)
-        }
-    }
-
-    func testFollowUpStartsMissingListenerAfterGrant() {
-        let followUp = PermissionFeedback.followUp(access: .granted, listenerRunning: false, windowVisible: true)
-        XCTAssertTrue(followUp.reinstallMonitor)
-        XCTAssertFalse(followUp.showSettingsWindow)
-    }
-
-    /// The running tap must not be torn down and rebuilt on another request.
-    func testFollowUpLeavesRunningListenerAlone() {
-        let followUp = PermissionFeedback.followUp(access: .granted, listenerRunning: true, windowVisible: true)
-        XCTAssertFalse(followUp.reinstallMonitor)
-    }
-
-    func testFollowUpDoesNotStartListenerWithoutAccess() {
-        let followUp = PermissionFeedback.followUp(access: .notGranted, listenerRunning: false, windowVisible: true)
-        XCTAssertFalse(followUp.reinstallMonitor, "starting a tap without access only fails")
-    }
-
-    /// A closed settings window still owns its model, so "model exists" is not "visible".
-    func testFollowUpNeedsWindowVisibleToSkipShowingIt() {
-        let hidden = PermissionFeedback.followUp(access: .notGranted, listenerRunning: false, windowVisible: false)
-        let visible = PermissionFeedback.followUp(access: .notGranted, listenerRunning: false, windowVisible: true)
-        XCTAssertTrue(hidden.showSettingsWindow, "a closed window must be reopened to show the result")
-        XCTAssertFalse(visible.showSettingsWindow)
-    }
-
-    func testRequestGrantedButListenerDownAsksForRetry() {
-        let status = PermissionStatus(access: .granted, listener: .failed)
-        let message = PermissionFeedback.requestMessage(accessAfterRequest: .granted, status: status)
-        XCTAssertTrue(message.contains("重试监听"))
-        XCTAssertFalse(message.contains("系统设置"), "access already exists; sending the user to settings is wrong here")
-    }
-
-    /// A user who just retried must not be told that retrying was unnecessary.
-    func testRetryMessageTellsRestartedUserThatItRestarted() {
-        let message = PermissionFeedback.retryMessage(
-            status: PermissionStatus(access: .granted, listener: .running),
-            wasRunning: false)
-        XCTAssertTrue(message.contains("已重新启动"), message)
-        XCTAssertFalse(message.contains("无需重试"), "the user did retry: \(message)")
-    }
-
-    func testRetryMessageSaysNothingWasRestartedWhenAlreadyRunning() {
-        let message = PermissionFeedback.retryMessage(
-            status: PermissionStatus(access: .granted, listener: .running),
-            wasRunning: true)
-        XCTAssertFalse(message.contains("已重新启动"), "nothing was restarted: \(message)")
-        XCTAssertTrue(message.contains("本来就在运行"), message)
-    }
-
-    func testFollowUpRecordsPriorListenerState() {
-        let running = PermissionFeedback.followUp(access: .granted, listenerRunning: true, windowVisible: true)
-        let stopped = PermissionFeedback.followUp(access: .granted, listenerRunning: false, windowVisible: true)
-        XCTAssertTrue(running.listenerWasRunning)
-        XCTAssertFalse(stopped.listenerWasRunning)
-        XCTAssertFalse(running.reinstallMonitor)
-        XCTAssertTrue(stopped.reinstallMonitor)
-    }
-
-    func testRetryMessageBlamesAccessOnlyWhenAccessIsMissing() {
-        let missing = PermissionFeedback.retryMessage(status: PermissionStatus(access: .notGranted, listener: .failed), wasRunning: false)
-        let granted = PermissionFeedback.retryMessage(status: PermissionStatus(access: .granted, listener: .failed), wasRunning: false)
-        XCTAssertNotEqual(missing, granted)
-        XCTAssertTrue(missing.contains("权限"))
-        XCTAssertFalse(granted.contains("没有输入监控权限"))
-        XCTAssertTrue(granted.contains("手动打开环形"), "keep the manual fallback visible")
-    }
-
-    func testSettingsURLPointsAtSystemSettingsInputMonitoring() throws {
-        let url = try XCTUnwrap(URL(string: InputMonitoringSettings.urlString))
-        XCTAssertEqual(url.scheme, "x-apple.systempreferences")
-        XCTAssertEqual(url.query, "Privacy_ListenEvent")
-    }
-}
-
 final class RingInteractionTests: XCTestCase {
     private let screen = CGRect(x: 100, y: 100, width: 1200, height: 800)
     private let otherScreen = CGRect(x: 1400, y: 100, width: 1200, height: 800)
@@ -1216,103 +1088,6 @@ final class RingPointerTests: XCTestCase {
     }
 }
 
-/// Drives the real normalizer with the aggregates CGEventFlags that flagsChanged
-/// actually carries, so the "pure Option only" rule is tested where it is decided.
-final class ModifierNormalizerTests: XCTestCase {
-    private let leftKey: Int64 = 0x3A
-    private let rightKey: Int64 = 0x3D
-    private let keyA: Int64 = 0x00
-
-    private func event(_ keyCode: Int64, alt: Bool, shift: Bool = false, control: Bool = false, command: Bool = false) -> InputEvent {
-        var flags: CGEventFlags = []
-        if alt { flags.insert(.maskAlternate) }
-        if shift { flags.insert(.maskShift) }
-        if control { flags.insert(.maskControl) }
-        if command { flags.insert(.maskCommand) }
-        return ModifierNormalizer.event(keyCode: keyCode, flags: flags)
-    }
-
-    func testPureOptionChangeBecomesOptionEvent() {
-        XCTAssertEqual(event(leftKey, alt: true), .optionDown(.left))
-        XCTAssertEqual(event(leftKey, alt: false), .optionUp(.left))
-        XCTAssertEqual(event(rightKey, alt: true), .optionDown(.right))
-        XCTAssertEqual(event(rightKey, alt: false), .optionUp(.right))
-    }
-
-    func testOptionWithAnyOtherModifierIsInterference() {
-        for key in [leftKey, rightKey] {
-            XCTAssertEqual(event(key, alt: true, command: true), .interference, "Cmd held on press")
-            XCTAssertEqual(event(key, alt: false, command: true), .interference, "Cmd still held on release")
-            XCTAssertEqual(event(key, alt: true, shift: true), .interference)
-            XCTAssertEqual(event(key, alt: true, control: true), .interference)
-            XCTAssertEqual(event(key, alt: false, shift: true), .interference)
-        }
-    }
-
-    func testNonOptionKeyIsInterference() {
-        XCTAssertEqual(ModifierNormalizer.event(keyCode: keyA, flags: []), .interference)
-        XCTAssertEqual(ModifierNormalizer.event(keyCode: keyA, flags: [.maskAlternate]), .interference)
-    }
-
-    func testSideResolution() {
-        XCTAssertEqual(ModifierNormalizer.side(forKeyCode: leftKey), .left)
-        XCTAssertEqual(ModifierNormalizer.side(forKeyCode: rightKey), .right)
-        XCTAssertNil(ModifierNormalizer.side(forKeyCode: keyA))
-    }
-
-    /// The verifier's scenario A: Cmd held, then a full double tap of left Option.
-    /// Real flags are [cmd+alt] on press and [cmd] on release, so nothing may trigger.
-    func testDoubleTapWhileCommandHeldNeverTriggers() {
-        var recognizer = OptionDoubleTapRecognizer()
-        func feed(_ flags: CGEventFlags, at time: TimeInterval) -> OptionDoubleTapRecognizer.Outcome {
-            recognizer.handle(ModifierNormalizer.event(keyCode: leftKey, flags: flags), at: time)
-        }
-        let press = CGEventFlags([.maskCommand, .maskAlternate])
-        let release = CGEventFlags([.maskCommand])
-        XCTAssertEqual(feed(press, at: start), .none)
-        XCTAssertEqual(feed(release, at: start + 0.05), .none)
-        XCTAssertEqual(feed(press, at: start + 0.15), .none)
-        XCTAssertEqual(feed(release, at: start + 0.2), .none)
-        XCTAssertEqual(recognizer.state, .idle)
-    }
-
-    func testDoubleTapWhileShiftHeldNeverTriggers() {
-        var recognizer = OptionDoubleTapRecognizer()
-        func feed(_ flags: CGEventFlags, at time: TimeInterval) -> OptionDoubleTapRecognizer.Outcome {
-            recognizer.handle(ModifierNormalizer.event(keyCode: leftKey, flags: flags), at: time)
-        }
-        let press = CGEventFlags([.maskShift, .maskAlternate])
-        let release = CGEventFlags([.maskShift])
-        _ = feed(press, at: start)
-        _ = feed(release, at: start + 0.05)
-        _ = feed(press, at: start + 0.15)
-        _ = feed(release, at: start + 0.2)
-        XCTAssertEqual(recognizer.state, .idle)
-    }
-
-    /// Same shape with no other modifier must still trigger: the guard is the modifier,
-    /// not a broken sequence.
-    func testSameSequenceWithoutOtherModifierTriggers() {
-        var recognizer = OptionDoubleTapRecognizer()
-        func feed(_ flags: CGEventFlags, at time: TimeInterval) -> OptionDoubleTapRecognizer.Outcome {
-            recognizer.handle(ModifierNormalizer.event(keyCode: leftKey, flags: flags), at: time)
-        }
-        _ = feed([.maskAlternate], at: start)
-        _ = feed([], at: start + 0.05)
-        XCTAssertEqual(feed([.maskAlternate], at: start + 0.15), .triggered(.left))
-        XCTAssertEqual(feed([], at: start + 0.2), .released(.left))
-    }
-
-    /// Overlapping left/right Option must not trigger (verifier scenario B).
-    func testOverlappingSidesDoNotTrigger() {
-        var recognizer = OptionDoubleTapRecognizer()
-        _ = recognizer.handle(ModifierNormalizer.event(keyCode: leftKey, flags: [.maskAlternate]), at: start)
-        _ = recognizer.handle(ModifierNormalizer.event(keyCode: rightKey, flags: [.maskAlternate]), at: start + 0.03)
-        _ = recognizer.handle(ModifierNormalizer.event(keyCode: leftKey, flags: [.maskAlternate]), at: start + 0.06)
-        _ = recognizer.handle(ModifierNormalizer.event(keyCode: rightKey, flags: []), at: start + 0.09)
-        XCTAssertEqual(recognizer.state, .idle)
-    }
-}
 
 /// The regression the verifier reproduced: a click between the two taps must not
 /// still produce a ring.
@@ -2623,26 +2398,17 @@ final class EntranceDurationConfigurationTests: XCTestCase {
     }
 }
 
-/// The sidebar's five pages: their order, their names and the symbols that stand for them. The
-/// detail view switches on exactly these cases, so a page cannot be shown under another name.
+/// The settings sidebar only shows current non-permission configuration.
 final class SettingsSectionTests: XCTestCase {
-    func testTheFivePagesKeepTheirOrderAndNames() {
+    func testPagesAndOrder() {
         XCTAssertEqual(SettingsSection.allCases.map(\.title),
-                       ["环形设置", "触发与手势", "权限与安全", "通用设置", "关于"])
+                       ["环形设置", "触发与手势", "通用设置", "关于"])
         XCTAssertEqual(SettingsSection.allCases.map(\.symbolName),
-                       ["circle.dashed", "keyboard", "shield.lefthalf.filled", "gearshape", "info.circle"])
-    }
-
-    func testEveryPageHasItsOwnStableIdentity() {
+                       ["circle.dashed", "keyboard", "gearshape", "info.circle"])
         let ids = SettingsSection.allCases.map(\.id)
-        XCTAssertEqual(ids, ["ring", "triggers", "permissions", "general", "about"])
-        XCTAssertEqual(Set(ids).count, 5, "导航项不能有重复身份")
-    }
-
-    /// The app always opens on the ring page; a stored page is never remembered.
-    func testTheFirstPageIsTheRingSettings() {
+        XCTAssertEqual(ids, ["ring", "triggers", "general", "about"])
+        XCTAssertEqual(Set(ids).count, 4)
         XCTAssertEqual(SettingsSection.allCases.first, .ring)
-        XCTAssertEqual(SettingsSection.ring.title, "环形设置")
     }
 }
 
@@ -2810,79 +2576,6 @@ final class UpdatePolicyTests: XCTestCase {
     }
 }
 
-// MARK: - Local signing policy
-
-final class LocalSigningPolicyTests: XCTestCase {
-    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
-    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
-
-    func testACompletePolicyIsAcceptedAndNormalised() {
-        let policy = LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: sha256)
-        XCTAssertEqual(policy?.identitySHA1, sha1.lowercased())
-        XCTAssertEqual(policy?.certificateSHA256, sha256.lowercased())
-    }
-
-    func testAMissingOrMalformedPolicyIsNotPartiallyTrusted() {
-        XCTAssertNil(LocalSigningPolicy(identitySHA1: nil, certificateSHA256: sha256))
-        XCTAssertNil(LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: nil))
-        XCTAssertNil(LocalSigningPolicy(identitySHA1: "1234", certificateSHA256: sha256))
-        XCTAssertNil(LocalSigningPolicy(identitySHA1: String(repeating: "z", count: 40), certificateSHA256: sha256))
-        XCTAssertNil(LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: String(repeating: "0", count: 63)))
-    }
-
-    func testThePolicyIsReadFromTheBundleInfoDictionary() {
-        let info: [String: Any] = [
-            LocalSigningPolicy.identityKey: sha1,
-            LocalSigningPolicy.certificateKey: sha256
-        ]
-        XCTAssertEqual(LocalSigningPolicy(info: info)?.identitySHA1, sha1.lowercased())
-        XCTAssertNil(LocalSigningPolicy(info: [:]))
-        XCTAssertNil(LocalSigningPolicy(info: nil))
-    }
-
-    func testTheLeafRequirementPinsTheCertificate() {
-        let policy = LocalSigningPolicy(identitySHA1: sha1, certificateSHA256: sha256)
-        XCTAssertEqual(policy?.leafRequirement, "certificate leaf = H\"\(sha1.lowercased())\"")
-    }
-}
-
-final class LocalSigningGateTests: XCTestCase {
-    private let policy = LocalSigningPolicy(identitySHA1: "0123456789ABCDEF0123456789ABCDEF01234567",
-                                            certificateSHA256: "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF")!
-
-    func testNoPolicyAnywhereKeepsThePublicAdhocPath() {
-        XCTAssertEqual(LocalSigningGate.decide(target: .none, incoming: .none), .publicUpdate)
-    }
-
-    func testAnAdhocInstallNeverGetsALocallySignedPackageSilently() {
-        XCTAssertEqual(LocalSigningGate.decide(target: .none, incoming: .valid(policy)), .bootstrapRequired)
-    }
-
-    func testTheInstalledAppDecidesAndThePackageCannotOverrideIt() {
-        let other = LocalSigningPolicy(identitySHA1: String(repeating: "a", count: 40),
-                                       certificateSHA256: String(repeating: "b", count: 64))!
-        XCTAssertEqual(LocalSigningGate.decide(target: .valid(policy), incoming: .valid(other)), .localResign(policy))
-        XCTAssertEqual(LocalSigningGate.decide(target: .valid(policy), incoming: .none), .localResign(policy))
-    }
-
-    func testCdhashRequirementsAreRecognisedAsAdhoc() {
-        XCTAssertTrue(LocalSigningGate.isCdhashRequirement("identifier \"com.jusda.ring.demo\" and cdhash H\"abc\""))
-        XCTAssertTrue(LocalSigningGate.isCdhashRequirement("CDHASH H\"abc\""))
-        XCTAssertFalse(LocalSigningGate.isCdhashRequirement(policy.leafRequirement))
-    }
-
-    func testMutualCompatibilityOutcomes() {
-        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: true, newSatisfiedByOld: true,
-                                                      oldRequirement: policy.leafRequirement), .compatible)
-        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: false, newSatisfiedByOld: false,
-                                                      oldRequirement: "identifier \"x\" and cdhash H\"00\""), .migrationRequired)
-        XCTAssertEqual(LocalSigningGate.compatibility(oldSatisfiedByNew: false, newSatisfiedByOld: true,
-                                                      oldRequirement: policy.leafRequirement), .incompatible)
-    }
-}
-
-// MARK: - Controlled child processes
-
 final class ControlledProcessTests: XCTestCase {
     func testAQuickCommandReturnsItsOutput() {
         switch ControlledProcess.run(executable: "/bin/echo", arguments: ["hello"], timeout: 5) {
@@ -2931,102 +2624,8 @@ final class ControlledProcessTests: XCTestCase {
     }
 }
 
-// MARK: - Local signing policy states (malformed is never the public path)
-
-final class LocalSigningPolicyStateTests: XCTestCase {
-    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
-    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
-
-    func testNoKeysMeansNoPolicy() {
-        XCTAssertEqual(LocalSigningPolicyState.state(info: nil), .none)
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [:]), .none)
-    }
-
-    func testPresentButMalformedKeysAreInvalidNotAbsent() {
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: "1234",
-                                                            LocalSigningPolicy.certificateKey: sha256]),
-                       .invalid("身份或证书键不是合法指纹（需要 40/64 位十六进制）"))
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
-                                                            LocalSigningPolicy.certificateKey: "zzzz"]),
-                       .invalid("身份或证书键不是合法指纹（需要 40/64 位十六进制）"))
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1]),
-                       .invalid("两个策略键必须同时存在"))
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.certificateKey: sha256]),
-                       .invalid("两个策略键必须同时存在"))
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: 42,
-                                                            LocalSigningPolicy.certificateKey: sha256]),
-                       .invalid("身份键的类型不是字符串"))
-        XCTAssertEqual(LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
-                                                            LocalSigningPolicy.certificateKey: [1, 2]]),
-                       .invalid("证书键的类型不是字符串"))
-    }
-
-    func testTheInvalidStateIsCarriedIntoTheDecisionSoNothingFallsBackToAdhoc() {
-        let broken = LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: "1234",
-                                                          LocalSigningPolicy.certificateKey: sha256])
-        guard case .invalidPolicy(let reason) = LocalSigningGate.decide(target: broken, incoming: .none) else {
-            return XCTFail("a broken installed policy must refuse, not update")
-        }
-        XCTAssertTrue(reason.contains("已安装的 Ring"))
-        guard case .invalidPolicy = LocalSigningGate.decide(target: .none, incoming: broken) else {
-            return XCTFail("a broken package policy must refuse")
-        }
-    }
-
-    func testAValidPolicyStillResigns() {
-        let good = LocalSigningPolicyState.state(info: [LocalSigningPolicy.identityKey: sha1,
-                                                        LocalSigningPolicy.certificateKey: sha256])
-        guard case .localResign(let policy) = LocalSigningGate.decide(target: good, incoming: .none) else {
-            return XCTFail("a valid installed policy must resign")
-        }
-        XCTAssertEqual(policy.identitySHA1, sha1.lowercased())
-    }
-}
-
-final class DesignatedRequirementTests: XCTestCase {
-    func testAPlainRequirementLineIsRead() {
-        let output = "Executable=/tmp/Ring.app/Contents/MacOS/Ring\ndesignated => identifier \"com.jusda.ring.demo\" and certificate leaf = H\"1377\""
-        XCTAssertEqual(DesignatedRequirement.expression(from: output),
-                       "identifier \"com.jusda.ring.demo\" and certificate leaf = H\"1377\"")
-    }
-
-    func testTheAdhocCommentMarkerIsAccepted() {
-        let output = "Executable=/tmp/Ring.app/Contents/MacOS/Ring\n# designated => cdhash H\"9c0aeff4\""
-        XCTAssertEqual(DesignatedRequirement.expression(from: output), "cdhash H\"9c0aeff4\"")
-        XCTAssertTrue(LocalSigningGate.isCdhashRequirement(DesignatedRequirement.expression(from: output)!))
-    }
-
-    func testOutputWithoutARequirementIsRejected() {
-        XCTAssertNil(DesignatedRequirement.expression(from: "Executable=/tmp/Ring.app"))
-        XCTAssertNil(DesignatedRequirement.expression(from: "designated =>   "))
-    }
-}
-
-final class ListenStartOutcomeTests: XCTestCase {
-    func testPermissionAndLifecycleFailuresStayApart() {
-        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: false, tapCreated: false, tapEnabled: false),
-                       .permissionMissing)
-        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: false, tapEnabled: false),
-                       .tapUnavailable)
-        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: true, tapEnabled: true),
-                       .running(enabled: true))
-        XCTAssertEqual(ListenStartOutcome.classify(preflightGranted: true, tapCreated: true, tapEnabled: false),
-                       .running(enabled: false))
-    }
-
-    func testDiagnosticLinesCarryStatesOnly() {
-        let line = ListenStartOutcome.running(enabled: true).description
-        XCTAssertEqual(line, "outcome=running preflight=true tapCreated=true tapEnabled=true")
-        XCTAssertFalse(line.contains("key"))
-        XCTAssertFalse(line.contains("char"))
-    }
-}
-
-// MARK: - The bundle on disk, not a Bundle object's cached copy
 
 final class BundleOnDiskTests: XCTestCase {
-    private let sha1 = "0123456789ABCDEF0123456789ABCDEF01234567"
-    private let sha256 = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
     private var scratch: URL!
 
     override func setUpWithError() throws {
@@ -3069,15 +2668,13 @@ final class BundleOnDiskTests: XCTestCase {
     }
 
     func testAPlistRewrittenAfterABundleReadIsSeenAsItIsOnDisk() throws {
-        let app = try makeApp(version: "0.1.10", keys: [LocalSigningPolicy.identityKey: sha1,
-                                                        LocalSigningPolicy.certificateKey: sha256])
-        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?[LocalSigningPolicy.identityKey] as? String, sha1)
+        let app = try makeApp(version: "0.1.10", keys: ["AuditTag": "original"])
+        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?["AuditTag"] as? String, "original")
         try makeApp(version: "0.1.12")
-        // Records the hazard the updater must not inherit: Bundle answers with the dictionary it
-        // read first, whatever the path holds now.
-        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?[LocalSigningPolicy.identityKey] as? String, sha1,
-                       "Bundle 按路径缓存 Info.plist；此断言不成立说明缓存行为已变")
-        XCTAssertEqual(LocalSigningPolicyState.state(info: BundleOnDisk.info(of: app)), .none)
+        // Bundle may cache Info.plist for the same path. The updater must read
+        // the current bytes directly from disk instead.
+        XCTAssertEqual(Bundle(path: app.path)?.infoDictionary?["AuditTag"] as? String, "original")
+        XCTAssertNil(BundleOnDisk.string("AuditTag", of: app))
         XCTAssertEqual(BundleOnDisk.string("CFBundleShortVersionString", of: app), "0.1.12")
     }
 
@@ -3093,11 +2690,9 @@ final class BundleOnDiskTests: XCTestCase {
         let expected = try statStamp(of: BundleOnDisk.executable(of: app))
             + "|" + statStamp(of: app.appendingPathComponent("Contents/Info.plist"))
         XCTAssertEqual(baseline, expected)
-        // Editing the plist alone leaves the executable stamp as it was, so the policy keys need
-        // their own part: otherwise a bundle whose keys were added while the helper waited passes.
+        // A plist-only change must be detected even if the executable is untouched.
         let executableBefore = try XCTUnwrap(BundleIdentity.executableStamp(of: app))
-        try makeApp(keys: [LocalSigningPolicy.identityKey: sha1,
-                           LocalSigningPolicy.certificateKey: sha256])
+        try makeApp(keys: ["AuditTag": "new"])
         XCTAssertEqual(try XCTUnwrap(BundleIdentity.executableStamp(of: app)), executableBefore)
         XCTAssertNotEqual(try XCTUnwrap(BundleOnDisk.helperBaseline(of: app)), baseline)
     }
@@ -3126,7 +2721,7 @@ final class BundleOnDiskTests: XCTestCase {
 
     func testAnUnreadableTargetIsNeverTreatedAsTheSameBundle() {
         XCTAssertEqual(UpdateTargetCheck.verdict(launched: nil, current: nil), .unreadable)
-        let launched = BundleIdentity(executable: "1:2:3:4", policy: .none)
+        let launched = BundleIdentity(executable: "1:2:3:4", plist: "5:6:7:8")
         XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: nil), .unreadable)
         guard let refusal = UpdateTargetCheck.failure(launched: launched, current: nil) else {
             return XCTFail("an unreadable target must be refused, not accepted")
@@ -3136,14 +2731,13 @@ final class BundleOnDiskTests: XCTestCase {
         }
     }
 
-    func testPolicyKeysWrittenIntoTheBundleChangeTheIdentity() throws {
+    func testPlistMutationChangesTheIdentity() throws {
         let app = try makeApp()
         let launched = try XCTUnwrap(BundleIdentity(app: app))
-        try makeApp(keys: [LocalSigningPolicy.identityKey: sha1,
-                           LocalSigningPolicy.certificateKey: sha256])
+        try makeApp(version: "2.0", keys: ["AuditTag": "new"])
         let current = try XCTUnwrap(BundleIdentity(app: app))
         XCTAssertEqual(current.executable, launched.executable)
-        XCTAssertNotEqual(current.policy, launched.policy)
+        XCTAssertNotEqual(current.plist, launched.plist)
         XCTAssertEqual(UpdateTargetCheck.verdict(launched: launched, current: current), .replacedSinceLaunch)
     }
 }
