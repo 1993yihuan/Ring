@@ -42,6 +42,22 @@ struct SettingsView: View {
         .background(Color(nsColor: .windowBackgroundColor))
         // The layout transition is the only motion here, and it is the user's to refuse.
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.visibleSlotCount)
+        .sheet(item: $model.activePickerTarget) { target in
+            QuickAppPickerView(
+                target: target,
+                onSelect: { candidate in
+                    model.assignApp(candidate.toAppReference(), toSlotID: target.slotID)
+                    model.activePickerTarget = nil
+                },
+                onBrowseCustom: {
+                    model.activePickerTarget = nil
+                    model.chooseAppCustom(forSlotID: target.slotID)
+                },
+                onCancel: {
+                    model.activePickerTarget = nil
+                }
+            )
+        }
     }
 
     /// The page's own floor. Inside the settings window it is the detail column beside the
@@ -55,9 +71,24 @@ struct SettingsView: View {
     private var page: some View {
         VStack(spacing: Layout.sectionSpacing) {
             HStack(alignment: .top, spacing: Layout.sectionSpacing) {
-                RingPreviewCard(slots: model.visibleSlots, hint: triggerHint)
-                    .frame(width: Layout.previewWidth)
-                    .frame(maxHeight: .infinity)
+                RingPreviewCard(
+                    slots: model.visibleSlots,
+                    hint: triggerHint,
+                    onEmptySlotClicked: { index, _ in
+                        model.chooseApp(at: index)
+                    },
+                    onEditSlotClicked: { index, _ in
+                        model.chooseApp(at: index)
+                    },
+                    onDeleteSlotClicked: { index, _ in
+                        model.removeApp(at: index)
+                    },
+                    onSwapSlots: { source, target in
+                        model.swapApps(at: source, and: target)
+                    }
+                )
+                .frame(width: Layout.previewWidth)
+                .frame(maxHeight: .infinity)
                 // The list takes the growing half: a shorter window scrolls it instead of
                 // squeezing the rows or leaving a hole under the card.
                 RingSlotsCard(model: model)
@@ -73,18 +104,63 @@ struct SettingsView: View {
 
 // MARK: - Preview column
 
+private enum RingPreviewButtonImageFactory {
+    static func createButtonImage(symbolName: String,
+                                  diameter: CGFloat,
+                                  backgroundColor: NSColor,
+                                  borderColor: NSColor,
+                                  symbolColor: NSColor) -> NSImage {
+        let size = NSSize(width: diameter, height: diameter)
+        return NSImage(size: size, flipped: false) { rect in
+            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
+            ctx.setFillColor(backgroundColor.cgColor)
+            ctx.fillEllipse(in: rect.insetBy(dx: 0.5, dy: 0.5))
+            ctx.setStrokeColor(borderColor.cgColor)
+            ctx.setLineWidth(1.0)
+            ctx.strokeEllipse(in: rect.insetBy(dx: 0.5, dy: 0.5))
+
+            let config = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+                .applying(.init(paletteColors: [symbolColor]))
+            if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
+                .withSymbolConfiguration(config) {
+                let symbolRect = CGRect(x: (diameter - symbol.size.width) / 2,
+                                        y: (diameter - symbol.size.height) / 2,
+                                        width: symbol.size.width,
+                                        height: symbol.size.height)
+                symbol.draw(in: symbolRect)
+            }
+            return true
+        }
+    }
+}
+
+private final class RingPreviewOverlayView: NSView {
+    override var isFlipped: Bool { false }
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        nil
+    }
+}
+
 /// The ring as the user will meet it, drawn from the same slots and the same
 /// `RingLayout.geometry` the real panel uses, so the two cannot drift apart.
 private struct RingPreviewCard: View {
     let slots: [Slot]
     let hint: String
+    var onEmptySlotClicked: ((Int, UUID) -> Void)?
+    var onEditSlotClicked: ((Int, UUID) -> Void)?
+    var onDeleteSlotClicked: ((Int, UUID) -> Void)?
+    var onSwapSlots: ((Int, Int) -> Void)?
 
     var body: some View {
         SettingsCard(stretchesVertically: true) {
             VStack(alignment: .leading, spacing: 12) {
                 Text("环形预览")
                     .font(.system(size: 15, weight: .semibold))
-                SlotRingPreview(slots: slots)
+                SlotRingPreview(slots: slots,
+                                onEmptySlotClicked: onEmptySlotClicked,
+                                onEditSlotClicked: onEditSlotClicked,
+                                onDeleteSlotClicked: onDeleteSlotClicked,
+                                onSwapSlots: onSwapSlots)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 Text(hint)
                     .font(.system(size: 11))
@@ -100,9 +176,17 @@ private struct RingPreviewCard: View {
 /// inside the available area with drop shadows and no clipping.
 struct SlotRingPreview: View {
     let slots: [Slot]
+    var onEmptySlotClicked: ((Int, UUID) -> Void)?
+    var onEditSlotClicked: ((Int, UUID) -> Void)?
+    var onDeleteSlotClicked: ((Int, UUID) -> Void)?
+    var onSwapSlots: ((Int, Int) -> Void)?
 
     var body: some View {
-        RingPreviewHostRepresentable(slots: slots)
+        RingPreviewHostRepresentable(slots: slots,
+                                     onEmptySlotClicked: onEmptySlotClicked,
+                                     onEditSlotClicked: onEditSlotClicked,
+                                     onDeleteSlotClicked: onDeleteSlotClicked,
+                                     onSwapSlots: onSwapSlots)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("环形预览")
     }
@@ -110,14 +194,26 @@ struct SlotRingPreview: View {
 
 private struct RingPreviewHostRepresentable: NSViewRepresentable {
     let slots: [Slot]
+    var onEmptySlotClicked: ((Int, UUID) -> Void)?
+    var onEditSlotClicked: ((Int, UUID) -> Void)?
+    var onDeleteSlotClicked: ((Int, UUID) -> Void)?
+    var onSwapSlots: ((Int, Int) -> Void)?
 
     func makeNSView(context: Context) -> RingPreviewHostView {
         let view = RingPreviewHostView()
+        view.onEmptySlotClicked = onEmptySlotClicked
+        view.onEditSlotClicked = onEditSlotClicked
+        view.onDeleteSlotClicked = onDeleteSlotClicked
+        view.onSwapSlots = onSwapSlots
         view.update(slots: slots)
         return view
     }
 
     func updateNSView(_ nsView: RingPreviewHostView, context: Context) {
+        nsView.onEmptySlotClicked = onEmptySlotClicked
+        nsView.onEditSlotClicked = onEditSlotClicked
+        nsView.onDeleteSlotClicked = onDeleteSlotClicked
+        nsView.onSwapSlots = onSwapSlots
         nsView.update(slots: slots)
     }
 }
@@ -125,7 +221,69 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
 final class RingPreviewHostView: NSView {
     private let materialView = RingMaterialView(frame: .zero)
     private let ringView = RingView(frame: .zero)
+    private let overlayView = RingPreviewOverlayView(frame: .zero)
+
+    private let editButtonLayer = CALayer()
+    private let deleteButtonLayer = CALayer()
+    private let dragGhostLayer = CALayer()
+    private let targetHighlightLayer = CAShapeLayer()
+
     private var slots: [Slot] = []
+    private var cachedSquareFrame: CGRect = .zero
+    private var cachedGeometry: RingGeometry?
+    private var trackingArea: NSTrackingArea?
+
+    private var hoveredSlotIndex: Int?
+    private var hoveredButton: RingPreviewButtonKind?
+    private var pendingTarget: RingPreviewHitTarget?
+    private var dragCandidateIndex: Int?
+    private var mouseDownPoint: NSPoint = .zero
+    private(set) var isDragging: Bool = false
+
+    var onEmptySlotClicked: ((Int, UUID) -> Void)?
+    var onEditSlotClicked: ((Int, UUID) -> Void)?
+    var onDeleteSlotClicked: ((Int, UUID) -> Void)?
+    var onSwapSlots: ((Int, Int) -> Void)?
+
+    private lazy var editNormalImage: NSImage = {
+        RingPreviewButtonImageFactory.createButtonImage(
+            symbolName: "pencil",
+            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
+            backgroundColor: NSColor(white: 0.18, alpha: 0.95),
+            borderColor: NSColor(white: 1.0, alpha: 0.35),
+            symbolColor: .white
+        )
+    }()
+
+    private lazy var editHoverImage: NSImage = {
+        RingPreviewButtonImageFactory.createButtonImage(
+            symbolName: "pencil",
+            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
+            backgroundColor: NSColor.controlAccentColor,
+            borderColor: NSColor(white: 1.0, alpha: 0.6),
+            symbolColor: .white
+        )
+    }()
+
+    private lazy var deleteNormalImage: NSImage = {
+        RingPreviewButtonImageFactory.createButtonImage(
+            symbolName: "xmark",
+            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
+            backgroundColor: NSColor(white: 0.18, alpha: 0.95),
+            borderColor: NSColor(white: 1.0, alpha: 0.35),
+            symbolColor: .white
+        )
+    }()
+
+    private lazy var deleteHoverImage: NSImage = {
+        RingPreviewButtonImageFactory.createButtonImage(
+            symbolName: "xmark",
+            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
+            backgroundColor: NSColor.systemRed,
+            borderColor: NSColor(white: 1.0, alpha: 0.6),
+            symbolColor: .white
+        )
+    }()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -144,28 +302,337 @@ final class RingPreviewHostView: NSView {
         layer?.masksToBounds = false
         materialView.autoresizingMask = []
         ringView.autoresizingMask = []
+        overlayView.autoresizingMask = []
+        overlayView.wantsLayer = true
+        overlayView.layer?.masksToBounds = false
+
         addSubview(materialView)
         addSubview(ringView)
+        addSubview(overlayView)
+
+        setupOverlayLayers()
+    }
+
+    private func setupOverlayLayers() {
+        guard let hostLayer = overlayView.layer else { return }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+
+        targetHighlightLayer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
+        targetHighlightLayer.strokeColor = NSColor.controlAccentColor.cgColor
+        targetHighlightLayer.lineWidth = 2.0
+        targetHighlightLayer.isHidden = true
+        hostLayer.addSublayer(targetHighlightLayer)
+
+        editButtonLayer.contentsScale = scale
+        editButtonLayer.shadowColor = NSColor.black.cgColor
+        editButtonLayer.shadowOpacity = 0.35
+        editButtonLayer.shadowOffset = CGSize(width: 0, height: -1)
+        editButtonLayer.shadowRadius = 2.0
+        editButtonLayer.isHidden = true
+        hostLayer.addSublayer(editButtonLayer)
+
+        deleteButtonLayer.contentsScale = scale
+        deleteButtonLayer.shadowColor = NSColor.black.cgColor
+        deleteButtonLayer.shadowOpacity = 0.35
+        deleteButtonLayer.shadowOffset = CGSize(width: 0, height: -1)
+        deleteButtonLayer.shadowRadius = 2.0
+        deleteButtonLayer.isHidden = true
+        hostLayer.addSublayer(deleteButtonLayer)
+
+        dragGhostLayer.contentsScale = scale
+        dragGhostLayer.opacity = 0.85
+        dragGhostLayer.shadowColor = NSColor.black.cgColor
+        dragGhostLayer.shadowOpacity = 0.5
+        dragGhostLayer.shadowOffset = CGSize(width: 0, height: -3)
+        dragGhostLayer.shadowRadius = 6.0
+        dragGhostLayer.isHidden = true
+        hostLayer.addSublayer(dragGhostLayer)
+
+        CATransaction.commit()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let oldArea = trackingArea {
+            removeTrackingArea(oldArea)
+        }
+        let area = NSTrackingArea(rect: bounds,
+                                  options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
+                                  owner: self,
+                                  userInfo: nil)
+        addTrackingArea(area)
+        trackingArea = area
     }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
-        // Static preview: never intercepts clicks or hovers
-        nil
+        let localPoint = superview != nil ? convert(point, from: superview) : point
+        if isDragging {
+            return self
+        }
+        if cachedSquareFrame.contains(localPoint) {
+            return self
+        }
+        return nil
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let localPoint = convert(event.locationInWindow, from: nil)
+        updateHoverState(at: localPoint)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        guard !isDragging else { return }
+        hoveredSlotIndex = nil
+        hoveredButton = nil
+        updateOverlay()
+    }
+
+    private func updateHoverState(at localPoint: NSPoint) {
+        guard !isDragging, cachedSquareFrame.width > 0, let geometry = cachedGeometry else { return }
+        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
+                                    y: localPoint.y - cachedSquareFrame.origin.y)
+        let target = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
+                                                     in: geometry,
+                                                     slots: slots,
+                                                     activeHoverSlot: hoveredSlotIndex)
+        switch target {
+        case .occupiedSlot(let index, let buttonKind):
+            hoveredSlotIndex = index
+            hoveredButton = buttonKind
+        case .emptySlot, .none:
+            hoveredSlotIndex = nil
+            hoveredButton = nil
+        }
+        updateOverlay()
+    }
+
+    private func updateOverlay() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        guard !isDragging,
+              let hovered = hoveredSlotIndex,
+              let geometry = cachedGeometry,
+              slots.indices.contains(hovered),
+              slots[hovered].app != nil else {
+            editButtonLayer.isHidden = true
+            deleteButtonLayer.isHidden = true
+            CATransaction.commit()
+            return
+        }
+
+        let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: hovered, in: geometry)
+        editButtonLayer.frame = slotGeom.editButtonFrame
+        deleteButtonLayer.frame = slotGeom.deleteButtonFrame
+
+        editButtonLayer.contents = (hoveredButton == .edit) ? editHoverImage : editNormalImage
+        deleteButtonLayer.contents = (hoveredButton == .delete) ? deleteHoverImage : deleteNormalImage
+
+        editButtonLayer.isHidden = false
+        deleteButtonLayer.isHidden = false
+
+        CATransaction.commit()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard cachedSquareFrame.width > 0, let geometry = cachedGeometry else {
+            super.mouseDown(with: event)
+            return
+        }
+        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
+                                    y: localPoint.y - cachedSquareFrame.origin.y)
+        let target = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
+                                                     in: geometry,
+                                                     slots: slots,
+                                                     activeHoverSlot: hoveredSlotIndex)
+        switch target {
+        case .emptySlot:
+            pendingTarget = target
+            dragCandidateIndex = nil
+        case .occupiedSlot(_, button: .some):
+            pendingTarget = target
+            dragCandidateIndex = nil
+        case .occupiedSlot(let index, button: .none):
+            pendingTarget = target
+            dragCandidateIndex = index
+            mouseDownPoint = localPoint
+            isDragging = false
+        case .none:
+            pendingTarget = nil
+            dragCandidateIndex = nil
+            super.mouseDown(with: event)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let sourceIndex = dragCandidateIndex,
+              slots.indices.contains(sourceIndex),
+              let sourceApp = slots[sourceIndex].app,
+              let geometry = cachedGeometry,
+              cachedSquareFrame.width > 0 else {
+            super.mouseDragged(with: event)
+            return
+        }
+
+        let localPoint = convert(event.locationInWindow, from: nil)
+        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
+                                    y: localPoint.y - cachedSquareFrame.origin.y)
+
+        if !isDragging {
+            let dist = hypot(localPoint.x - mouseDownPoint.x, localPoint.y - mouseDownPoint.y)
+            if dist > 4 {
+                isDragging = true
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                editButtonLayer.isHidden = true
+                deleteButtonLayer.isHidden = true
+
+                let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: sourceIndex, in: geometry)
+                let icon = NSWorkspace.shared.icon(forFile: sourceApp.path)
+                dragGhostLayer.contents = icon
+                dragGhostLayer.bounds = CGRect(origin: .zero, size: slotGeom.iconFrame.size)
+                dragGhostLayer.position = pointInSquare
+                dragGhostLayer.isHidden = false
+                CATransaction.commit()
+
+                NSCursor.closedHand.set()
+            }
+        }
+
+        if isDragging {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            dragGhostLayer.position = pointInSquare
+
+            let dropTarget = RingPreviewLayoutHelper.dragDropTarget(at: pointInSquare,
+                                                                    in: geometry,
+                                                                    slots: slots,
+                                                                    sourceIndex: sourceIndex)
+            if let target = dropTarget {
+                let targetGeom = RingPreviewLayoutHelper.slotGeometry(for: target, in: geometry)
+                let rect = targetGeom.iconFrame.insetBy(dx: -4, dy: -4)
+                targetHighlightLayer.path = CGPath(roundedRect: rect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+                targetHighlightLayer.isHidden = false
+            } else {
+                targetHighlightLayer.isHidden = true
+            }
+            CATransaction.commit()
+        }
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        guard cachedSquareFrame.width > 0, let geometry = cachedGeometry else {
+            super.mouseUp(with: event)
+            return
+        }
+        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
+                                    y: localPoint.y - cachedSquareFrame.origin.y)
+
+        if isDragging {
+            let source = dragCandidateIndex
+            let dropTarget = source != nil ? RingPreviewLayoutHelper.dragDropTarget(at: pointInSquare,
+                                                                                    in: geometry,
+                                                                                    slots: slots,
+                                                                                    sourceIndex: source!) : nil
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            isDragging = false
+            dragGhostLayer.isHidden = true
+            targetHighlightLayer.isHidden = true
+            CATransaction.commit()
+
+            dragCandidateIndex = nil
+            pendingTarget = nil
+
+            if let source = source, let target = dropTarget {
+                onSwapSlots?(source, target)
+            }
+
+            updateHoverState(at: localPoint)
+            window?.invalidateCursorRects(for: self)
+            return
+        }
+
+        dragCandidateIndex = nil
+
+        let currentTarget = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
+                                                            in: geometry,
+                                                            slots: slots,
+                                                            activeHoverSlot: hoveredSlotIndex)
+        let triggered = pendingTarget
+        pendingTarget = nil
+
+        switch (triggered, currentTarget) {
+        case (.emptySlot(let idx1), .emptySlot(let idx2)) where idx1 == idx2:
+            if slots.indices.contains(idx1) {
+                onEmptySlotClicked?(idx1, slots[idx1].id)
+            }
+        case (.occupiedSlot(let idx1, button: .edit), .occupiedSlot(let idx2, button: .edit)) where idx1 == idx2:
+            if slots.indices.contains(idx1) {
+                onEditSlotClicked?(idx1, slots[idx1].id)
+            }
+        case (.occupiedSlot(let idx1, button: .delete), .occupiedSlot(let idx2, button: .delete)) where idx1 == idx2:
+            if slots.indices.contains(idx1) {
+                onDeleteSlotClicked?(idx1, slots[idx1].id)
+            }
+        default:
+            break
+        }
+
+        updateHoverState(at: localPoint)
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        guard let geometry = cachedGeometry, cachedSquareFrame.width > 0 else { return }
+        for (index, frame) in geometry.iconFrames.enumerated() {
+            guard slots.indices.contains(index) else { continue }
+            let rectInHost = CGRect(x: cachedSquareFrame.origin.x + frame.origin.x,
+                                    y: cachedSquareFrame.origin.y + frame.origin.y,
+                                    width: frame.width,
+                                    height: frame.height)
+            addCursorRect(rectInHost, cursor: .pointingHand)
+        }
     }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        window?.acceptsMouseMovedEvents = true
+        let scale = window?.backingScaleFactor ?? 2.0
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        editButtonLayer.contentsScale = scale
+        deleteButtonLayer.contentsScale = scale
+        dragGhostLayer.contentsScale = scale
+        targetHighlightLayer.contentsScale = scale
+        CATransaction.commit()
         layoutPreview()
     }
 
     override func viewDidChangeEffectiveAppearance() {
         super.viewDidChangeEffectiveAppearance()
         layoutPreview()
+        updateOverlay()
     }
 
     func update(slots: [Slot]) {
         self.slots = slots
+        if let hovered = hoveredSlotIndex, (!slots.indices.contains(hovered) || slots[hovered].app == nil) {
+            hoveredSlotIndex = nil
+            hoveredButton = nil
+        }
         layoutPreview()
+        updateOverlay()
     }
 
     override func layout() {
@@ -185,10 +652,13 @@ final class RingPreviewHostView: NSView {
         let originY = (containerBounds.height - side) / 2
         let squareFrame = CGRect(x: originX, y: originY, width: side, height: side)
 
+        cachedSquareFrame = squareFrame
         materialView.frame = squareFrame
         ringView.frame = squareFrame
+        overlayView.frame = squareFrame
 
         let geometry = RingLayout.geometry(slotCount: slots.count, side: side, panelOrigin: .zero)
+        cachedGeometry = geometry
 
         materialView.selectedSlot = nil
         materialView.prepare(geometry: geometry)
@@ -202,6 +672,8 @@ final class RingPreviewHostView: NSView {
                          items: items,
                          mode: .angularClick,
                          decision: nil)
+        window?.invalidateCursorRects(for: self)
+        updateOverlay()
     }
 }
 
@@ -445,6 +917,7 @@ final class SettingsModel: ObservableObject {
     @Published var entranceDurationText: String
     @Published var entranceDurationError: String?
     @Published var lastError: String?
+    @Published var activePickerTarget: PickerTarget?
 
     private let store: SlotStore
     private var config: LauncherConfiguration
@@ -483,6 +956,21 @@ final class SettingsModel: ObservableObject {
     }
 
     func chooseApp(at index: Int) {
+        guard visibleSlots.indices.contains(index) else { return }
+        let slot = visibleSlots[index]
+        activePickerTarget = PickerTarget(slotID: slot.id, slotIndex: index)
+    }
+
+    /// Re-locates the slot by UUID and writes back the selected application.
+    func assignApp(_ reference: AppReference, toSlotID targetSlotID: UUID) {
+        let updated = QuickAppWriter.apply(reference: reference, toSlotID: targetSlotID, in: config)
+        guard updated != config else { return }
+        slots = updated.slots
+        commit()
+    }
+
+    /// Fallback: runs NSOpenPanel to choose a custom .app bundle, re-locating the slot by UUID.
+    func chooseAppCustom(forSlotID targetSlotID: UUID) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -498,14 +986,21 @@ final class SettingsModel: ObservableObject {
         let reference = AppReference(bundleIdentifier: bundle?.bundleIdentifier,
                                      displayName: FileManager.default.displayName(atPath: url.path),
                                      path: url.path)
-        guard visibleSlots.indices.contains(index) else { return }
-        slots[index].app = reference
-        commit()
+        assignApp(reference, toSlotID: targetSlotID)
     }
 
     func removeApp(at index: Int) {
         guard visibleSlots.indices.contains(index) else { return }
         slots[index].app = nil
+        commit()
+    }
+
+    /// Swaps the assigned applications between two occupied slots on the preview ring,
+    /// keeping all slot IDs, the visible slot count, and the hidden tail intact.
+    func swapApps(at sourceIndex: Int, and targetIndex: Int) {
+        let updated = RingPreviewSlotSwap.swap(in: config, source: sourceIndex, destination: targetIndex)
+        guard updated != config else { return }
+        slots = updated.slots
         commit()
     }
 
