@@ -17,7 +17,7 @@ private func projectRootFromSourceFile() -> URL {
 /// FileManager.temporaryDirectory in this process (measured), so this never falls back
 /// to the system temp directory: it resolves the project from #filePath and fails loudly
 /// when that location is not usable.
-private func testScratchDirectory() -> URL {
+func testScratchDirectory() -> URL {
     let base: URL
     if let configured = ProcessInfo.processInfo.environment["RING_TEST_DATA_DIR"], !configured.isEmpty {
         base = URL(fileURLWithPath: configured, isDirectory: true)

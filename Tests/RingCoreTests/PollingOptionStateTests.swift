@@ -7,7 +7,7 @@ final class PollingOptionStateTests: XCTestCase {
                       flag: Bool? = nil, other: Bool = false,
                       keys: UInt64 = 0) -> OptionPollSnapshot {
         OptionPollSnapshot(leftDown: left, rightDown: right,
-                           optionFlag: flag ?? (left || right),
+                           aggregateFlag: flag ?? (left || right),
                            otherModifiers: other, keyDownCount: keys)
     }
 
@@ -95,6 +95,16 @@ final class PollingOptionStateTests: XCTestCase {
         XCTAssertEqual(poll.consume(snap(true, keys: 11)), [.interference])
         XCTAssertEqual(poll.consume(snap(keys: 11)), [])
         XCTAssertEqual(poll.consume(snap(true, keys: 11)), [.optionDown(.left)])
+    }
+
+    /// The physical key and the aggregate flag must agree: a held key the flags do not
+    /// report is a conflicting read, never a press.
+    func testHardwareDownWithoutTheAggregateFlagIsInterference() {
+        var poll = PollingOptionState()
+        _ = poll.consume(snap())
+        XCTAssertEqual(poll.consume(snap(true, flag: false)), [.interference])
+        XCTAssertEqual(poll.consume(snap()), [])
+        XCTAssertEqual(poll.consume(snap(true)), [.optionDown(.left)])
     }
 
     func testNoEventsFromUnchangedSamples() {

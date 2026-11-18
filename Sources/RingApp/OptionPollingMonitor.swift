@@ -3,7 +3,9 @@ import CoreGraphics
 import Foundation
 import RingCore
 
-/// Passive global Option sampler. No keyboard event tap or input monitoring permission.
+/// Passive global modifier sampler for whichever double tap is configured: the two physical
+/// Option keys by default, the two Command keys when that is chosen. No keyboard event tap,
+/// no input monitoring permission and no accessibility permission.
 final class OptionPollingMonitor {
     enum Health: Equatable { case stopped, running, unavailable }
 
@@ -15,6 +17,25 @@ final class OptionPollingMonitor {
     var onMouseDown: ((CGPoint?) -> Void)?
     var onPointerMove: ((CGPoint) -> Void)?
     var onTick: ((TimeInterval) -> Void)?
+    /// The custom combination whose two keys are being held right now. Non-nil only while a
+    /// session (or the tail of one) needs it, so Ring reads the keyboard only then.
+    var combinationProbe: HotKeyCombination? {
+        didSet {
+            guard combinationProbe != oldValue else { return }
+            reportedCombination = false
+        }
+    }
+    /// One hardware sample of that combination: true while the modifier and the key are both down.
+    var onCombinationSample: ((Bool) -> Void)?
+    /// What the double tap watches. `nil` while a registered combination is the trigger: the
+    /// mouse monitor and the tick keep running, but no modifier event is made from samples.
+    public var tapKey: TapKey? = .option {
+        didSet {
+            guard tapKey != oldValue else { return }
+            // A new target starts from a fresh baseline, so a key already held cannot count.
+            pollState.reset()
+        }
+    }
     private var timer: Timer?
     private var mouseMonitor: Any?
     private var pollState = PollingOptionState()
@@ -22,13 +43,16 @@ final class OptionPollingMonitor {
     private var lastTickTime: TimeInterval = 0
     private var reportedAmbiguous = false
     private var reportedSide = false
+    private var reportedCombination = false
 
     var isRunning: Bool { timer != nil && mouseMonitor != nil && health == .running }
 
     func start() -> Bool {
         stop()
         pollState.reset()
-        _ = pollState.consume(sample()) // Baseline, never an invented key press.
+        if let baseline = sample() {
+            _ = pollState.consume(baseline) // Baseline, never an invented key press.
+        }
         lastPointer = NSEvent.mouseLocation
         lastTickTime = ProcessInfo.processInfo.systemUptime
         reportedAmbiguous = false
@@ -84,32 +108,51 @@ final class OptionPollingMonitor {
         }
     }
 
-    private func sample() -> OptionPollSnapshot {
+    /// `nil` when the double tap is not the trigger, so no sample can be read as a press.
+    private func sample() -> OptionPollSnapshot? {
+        guard let tapKey else { return nil }
         let flags = NSEvent.modifierFlags
         let state = CGEventSourceStateID.combinedSessionState
+        let aggregate = flags.contains(tapKey == .option ? .option : .command)
+        // Any other modifier is an interruption, and so is any other key going down.
+        let foreign: NSEvent.ModifierFlags = tapKey == .option
+            ? [.shift, .control, .command]
+            : [.shift, .control, .option]
         return OptionPollSnapshot(
-            leftDown: CGEventSource.keyState(state, key: 0x3A),
-            rightDown: CGEventSource.keyState(state, key: 0x3D),
-            optionFlag: flags.contains(.option),
-            otherModifiers: !flags.intersection([.shift, .control, .command]).isEmpty,
+            leftDown: CGEventSource.keyState(state, key: tapKey.leftKeyCode),
+            rightDown: CGEventSource.keyState(state, key: tapKey.rightKeyCode),
+            aggregateFlag: aggregate,
+            otherModifiers: !flags.intersection(foreign).isEmpty,
             keyDownCount: UInt64(CGEventSource.counterForEventType(state, eventType: .keyDown))
         )
     }
 
     private func poll() {
-        let snapshot = sample()
-        if snapshot.isAmbiguous && !reportedAmbiguous {
-            reportedAmbiguous = true
-            record("Option side unavailable or flags disagree; suppressed")
+        var events: [InputEvent] = []
+        if let snapshot = sample() {
+            if snapshot.isAmbiguous && !reportedAmbiguous {
+                reportedAmbiguous = true
+                record("modifier side unavailable or flags disagree; suppressed")
+            }
+            if snapshot.side != nil && !reportedSide {
+                reportedSide = true
+                record("modifier side observed (no key contents collected)")
+            }
+            events = pollState.consume(snapshot)
         }
-        if snapshot.side != nil && !reportedSide {
-            reportedSide = true
-            record("Option side observed (no key contents collected)")
+        if let probe = combinationProbe {
+            // The keyboard is only read while a hold session is open: the same passive state
+            // query the double tap uses, never a listener.
+            let state = CGEventSourceStateID.combinedSessionState
+            let held = CombinationHold.isHeld(keyState: CGEventSource.keyState(state, key: probe.keyCode),
+                                              modifier: probe.modifier,
+                                              flags: NSEvent.modifierFlags)
+            if !held && !reportedCombination {
+                reportedCombination = true
+                record("combination session sample: a key is up")
+            }
+            onCombinationSample?(held)
         }
-
-        // Mouse location is only needed on an edge or while highlighting the
-        // visible ring. Avoid querying the global pointer 120 times/sec idle.
-        let events = pollState.consume(snapshot)
         let forwardMoves = forwardsPointerMoves
         if !events.isEmpty || forwardMoves {
             // This position is sampled, not atomic with the physical key release.
@@ -124,4 +167,14 @@ final class OptionPollingMonitor {
             onTick?(now)
         }
     }
+}
+
+extension OptionPollingMonitor: TapKeySink {
+    /// A sleep, a new binding or a session change starts over: the next sample is a baseline.
+    public func resetSamplingBaseline() {
+        pollState.reset()
+    }
+
+    /// The probe needs a running timer; without it no sample could ever arrive.
+    public var canSampleKeys: Bool { isRunning }
 }

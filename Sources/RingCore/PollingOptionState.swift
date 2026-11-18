@@ -1,33 +1,35 @@
 import Foundation
 
-/// A single sampled view of the global Option keys. Hardware side readings and
-/// AppKit's aggregate flag must agree before we generate an input event.
+/// A single sampled view of the two physical keys of one modifier (whichever the current
+/// double tap watches). Hardware side readings and AppKit's aggregate flag must agree before
+/// we generate an input event.
 public struct OptionPollSnapshot: Sendable, Equatable {
     public var leftDown: Bool
     public var rightDown: Bool
-    public var optionFlag: Bool
+    /// The aggregate modifier flag of that same modifier, never of another one.
+    public var aggregateFlag: Bool
     public var otherModifiers: Bool
     public var keyDownCount: UInt64
 
-    public init(leftDown: Bool, rightDown: Bool, optionFlag: Bool,
+    public init(leftDown: Bool, rightDown: Bool, aggregateFlag: Bool,
                 otherModifiers: Bool = false, keyDownCount: UInt64 = 0) {
         self.leftDown = leftDown
         self.rightDown = rightDown
-        self.optionFlag = optionFlag
+        self.aggregateFlag = aggregateFlag
         self.otherModifiers = otherModifiers
         self.keyDownCount = keyDownCount
     }
 
-    public var anyOptionDown: Bool { leftDown || rightDown || optionFlag }
+    public var anyDown: Bool { leftDown || rightDown || aggregateFlag }
 
     /// A side-less aggregate press, conflicting reads, or two sides held is
     /// deliberately unknown. Never quietly convert it into a valid double tap.
     public var isAmbiguous: Bool {
-        leftDown && rightDown || optionFlag != (leftDown || rightDown)
+        leftDown && rightDown || aggregateFlag != (leftDown || rightDown)
     }
 
     public var side: OptionSide? {
-        guard !isAmbiguous, optionFlag else { return nil }
+        guard !isAmbiguous, aggregateFlag else { return nil }
         return leftDown ? .left : .right
     }
 }
@@ -52,7 +54,7 @@ public struct PollingOptionState: Sendable {
         defer { previous = current }
         guard let previous else {
             // Starting a listener while a key is held must not create a press.
-            blockedUntilRelease = current.anyOptionDown
+            blockedUntilRelease = current.anyDown
             return []
         }
 
@@ -60,7 +62,7 @@ public struct PollingOptionState: Sendable {
             || current.otherModifiers || previous.otherModifiers
             || current.isAmbiguous || previous.isAmbiguous
         if interference {
-            blockedUntilRelease = current.anyOptionDown
+            blockedUntilRelease = current.anyDown
             // A held modifier must not repeat cancellations 120 times per second.
             guard !reportedInterference else { return [] }
             reportedInterference = true
@@ -69,7 +71,7 @@ public struct PollingOptionState: Sendable {
         reportedInterference = false
 
         if blockedUntilRelease {
-            if !current.anyOptionDown { blockedUntilRelease = false }
+            if !current.anyDown { blockedUntilRelease = false }
             return []
         }
 

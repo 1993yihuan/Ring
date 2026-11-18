@@ -6,6 +6,9 @@ import SwiftUI
 final class AppCoordinator: NSObject, NSApplicationDelegate {
     private let monitor = OptionPollingMonitor()
     private let launcher = Launcher()
+    /// The trigger: the saved choice, the sampler's target and the registered chord.
+    private var trigger: TriggerController?
+    private let hotKey = HotKeyMonitor()
     private var recognizer = OptionDoubleTapRecognizer()
     private let session = RingSession()
     private let panel = RingPanel()
@@ -58,6 +61,21 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                                                        supportDirectory: supportDirectory)
         let store = SlotStore(directory: dataDirectory)
         self.store = store
+        // Built here, before the sampler starts: the trigger decides what it watches.
+        let trigger = TriggerController(store: TriggerStore(directory: dataDirectory),
+                                        registrar: hotKey,
+                                        sink: monitor)
+        self.trigger = trigger
+        trigger.onChange = { [weak self] in self?.triggerChanged() }
+        trigger.onSessionChange = { [weak self] in self?.syncCombinationProbe() }
+        trigger.onFinish = { [weak self] in self?.combinationFinished() }
+        hotKey.onPress = { [weak self] in
+            // Both keys of the live combination came down. Auto-repeat and a press while the
+            // settings window records change nothing: the session lives in the controller.
+            guard let self, self.trigger?.hotKeyPressed() == true else { return }
+            self.beginCombinationHold()
+        }
+        hotKey.onRelease = { [weak self] in self?.trigger?.hotKeyReleased() }
         // Only listener state is logged; no keyboard content is recorded.
         monitor.diagnosticFile = dataDirectory.appendingPathComponent("listen-diagnostics.log")
 
@@ -74,16 +92,38 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             selector: #selector(accessibilityDisplayOptionsChanged),
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil)
+        // A sleep ends every gesture: nothing may fire from a press that happened before it.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemWillSleep),
+            name: NSWorkspace.willSleepNotification,
+            object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: NSWorkspace.didWakeNotification,
+            object: nil)
     }
 
     /// Restart a stopped sampler on activation without asking for permission.
     func applicationDidBecomeActive(_ notification: Notification) {
         refreshMonitorStatus()
         if !monitor.isRunning { installMonitor() }
+        // A registration the system dropped with the old session is made again. An unchanged
+        // binding keeps a hold that is really open; only a fallback takes it away, and then the
+        // ring on screen is closed with it instead of waiting for a release that can no longer
+        // finish anything.
+        let before = trigger?.activeBinding
+        trigger?.reapply()
+        if let trigger, before != trigger.activeBinding, session.isVisible {
+            cancelRing()
+        }
+        syncCombinationProbe()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         monitor.stop()
+        trigger?.stopListening()
         if let statusRightClickMonitor { NSEvent.removeMonitor(statusRightClickMonitor) }
         statusRightClickMonitor = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
@@ -111,10 +151,36 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// A sleep ends every gesture: the ring goes, the sampler takes a new baseline and a held
+    /// chord latch is dropped, so the first press after the wake is a press again.
+    @objc private func systemWillSleep() {
+        resetInteraction(reapplying: false)
+    }
+
+    /// The chord is registered under a new id on wake, so a press queued before the sleep cannot
+    /// fire after it.
+    @objc private func systemDidWake() {
+        resetInteraction(reapplying: true)
+    }
+
+    private func resetInteraction(reapplying: Bool) {
+        recognizer.reset()
+        if session.isVisible { cancelRing() }
+        monitor.forwardsPointerMoves = false
+        monitor.resetSamplingBaseline()
+        if reapplying {
+            trigger?.handleSystemWake()
+            if !monitor.isRunning { installMonitor() }
+        }
+        syncCombinationProbe()
+        refreshMonitorStatus()
+    }
+
     // MARK: - Trigger wiring
 
     private func installMonitor() {
         monitor.onEvent = { [weak self] event, point in self?.handle(event, at: point) }
+        monitor.onCombinationSample = { [weak self] held in self?.combinationSample(held) }
         monitor.onMouseDown = { [weak self] point in self?.handleMouseDown(at: point) }
         monitor.onPointerMove = { [weak self] point in self?.pointerMoved(to: point, from: .global) }
         monitor.onTick = { [weak self] time in self?.handleTick(time) }
@@ -122,6 +188,50 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         if !monitor.start() {
             NSLog("Ring: 全局监听不可用")
         }
+        refreshMonitorStatus()
+    }
+
+    /// Both keys are down: the ring behaves like the Option hold — move the pointer, let go of
+    /// either key, launch what is under it.
+    private func beginCombinationHold() {
+        guard !session.isVisible else { return }
+        showRing(mode: .holdToLaunch)
+        if !session.isVisible {
+            // Nothing could be shown, so the session must not stay open.
+            trigger?.hotKeyCancelled()
+        }
+        syncCombinationProbe()
+    }
+
+    /// One hardware sample of the held combination, forwarded as is. Finishing is not decided
+    /// here: the controller's single finish entry point reports it once, whichever of the two
+    /// signals arrived first.
+    private func combinationSample(_ held: Bool) {
+        trigger?.hotKeySample(held: held)
+    }
+
+    /// The hold is over (a key came up). The pointer at this moment decides, and a launch happens
+    /// at most once because the session can only finish once.
+    private func combinationFinished() {
+        syncCombinationProbe()
+        if session.isVisible {
+            releaseSelection(at: NSEvent.mouseLocation)
+        } else {
+            cancelRing()
+        }
+    }
+
+    /// The sampler reads the keyboard only while a combination session (or the tail of one)
+    /// is open; the controller is the single source of that answer.
+    private func syncCombinationProbe() {
+        monitor.combinationProbe = trigger?.combinationProbe
+    }
+
+    /// The trigger changed under a ring on screen, or while a double tap was half done: the
+    /// ring was opened by the old binding, so it closes and no half gesture survives.
+    private func triggerChanged() {
+        recognizer.reset()
+        if session.isVisible { cancelRing() }
         refreshMonitorStatus()
     }
 
@@ -410,6 +520,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private func overlayPressed() {
         guard inputMode == .holdToLaunch, session.isVisible else { return }
         keepingOverlayForRelease = true
+        trigger?.hotKeyCancelled()
+        syncCombinationProbe()
         session.cancel()
         monitor.forwardsPointerMoves = false
         beginExit()
@@ -504,8 +616,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// (Esc, overlay, outside click, a slot-count change) never leave the panel behind.
     private func cancelRing() {
         recognizer.reset()
+        // A combination session ends here too, without a launch.
+        trigger?.hotKeyCancelled()
         session.cancel()
         hidePanel()
+        syncCombinationProbe()
     }
 
     private func hidePanel() {
@@ -585,11 +700,13 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     /// The menu no longer carries a listener entry, so its tool tip is the only place the
-    /// listener's health is stated.
+    /// trigger and the listener's health are stated.
     private func refreshMonitorStatus() {
+        // The status item names what really fires, not what the file wishes for.
+        let name = trigger?.activeTitle ?? "双击 Option"
         statusItem?.button?.toolTip = monitor.isRunning
-            ? "Ring：Option 监听运行中"
-            : "Ring：Option 监听不可用"
+            ? "Ring：\(name) 监听运行中"
+            : "Ring：\(name) 监听不可用"
     }
 
     /// The left click is the button's only action; the menu is the right click's.
@@ -622,7 +739,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             // could not be dragged back.
             // One navigation shell around the page that already exists: the ring page is
             // embedded untouched, the other four sidebar pages are placeholders.
-            let hosting = NSHostingController(rootView: SettingsRootView(model: model))
+            guard let trigger else {
+                presentErrorAlert("触发设置未就绪，无法打开设置。请重启 Ring。")
+                return
+            }
+            let hosting = NSHostingController(rootView: SettingsRootView(model: model, trigger: trigger))
             let window = NSWindow(contentViewController: hosting)
             // The native title bar carries the name: the page itself must not repeat it. The
             // title text and the bar's own background are hidden so the window reads as one

@@ -19,6 +19,9 @@ private enum Layout {
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
+    /// The sentence describes whichever trigger is configured, so the preview cannot claim
+    /// the Option gesture while the ring opens another way.
+    var triggerHint: String = "连续按两次同一侧 Option 打开环形；第二下按住时移动指针选择，松开启动。"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -52,7 +55,7 @@ struct SettingsView: View {
     private var page: some View {
         VStack(spacing: Layout.sectionSpacing) {
             HStack(alignment: .top, spacing: Layout.sectionSpacing) {
-                RingPreviewCard(slots: model.visibleSlots)
+                RingPreviewCard(slots: model.visibleSlots, hint: triggerHint)
                     .frame(width: Layout.previewWidth)
                     .frame(maxHeight: .infinity)
                 // The list takes the growing half: a shorter window scrolls it instead of
@@ -74,6 +77,7 @@ struct SettingsView: View {
 /// `RingLayout.geometry` the real panel uses, so the two cannot drift apart.
 private struct RingPreviewCard: View {
     let slots: [Slot]
+    let hint: String
 
     var body: some View {
         SettingsCard(stretchesVertically: true) {
@@ -82,13 +86,10 @@ private struct RingPreviewCard: View {
                     .font(.system(size: 15, weight: .semibold))
                 SlotRingPreview(slots: slots)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("连续按两次同一侧 Option，快速打开环形启动器")
-                    Text("按住第二次 Option 时移动指针选择，松开启动")
-                }
-                .font(.system(size: 11))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                Text(hint)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -406,7 +407,7 @@ private struct SettingsFooterView: View {
 
 /// One card look for both columns and the permission area: a soft system surface with a
 /// hairline edge, so the page reads as layers instead of a single grey sheet.
-private struct SettingsCard<Content: View>: View {
+struct SettingsCard<Content: View>: View {
     var padding: CGFloat = Layout.cardPadding
     /// Both the preview card and the slots card stretch vertically so their borders line up evenly.
     var stretchesVertically: Bool = false

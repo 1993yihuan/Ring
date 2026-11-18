@@ -6,6 +6,9 @@ import SwiftUI
 /// keyboard monitoring permission flow or legacy listener configuration.
 struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
+    /// The trigger page's own model: the applier lives as long as Ring, so the page can be
+    /// opened, switched away from and reopened without losing the active binding.
+    @ObservedObject var trigger: TriggerController
     /// The updater outlives the page: switching to another sidebar page and back keeps a running
     /// download, its progress and its result.
     @StateObject private var update: UpdateModel
@@ -17,10 +20,12 @@ struct SettingsRootView: View {
     private let version: String?
 
     init(model: SettingsModel,
+         trigger: TriggerController,
          initialSelection: SettingsSection = .ring,
          version: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
          update: UpdateModel? = nil) {
         self.model = model
+        self.trigger = trigger
         _selection = State(initialValue: initialSelection)
         self.version = version
         _update = StateObject(wrappedValue: update ?? UpdateModel())
@@ -69,9 +74,9 @@ struct SettingsRootView: View {
     private var detail: some View {
         switch page {
         case .ring:
-            SettingsView(model: model)
+            SettingsView(model: model, triggerHint: trigger.previewHint)
         case .triggers:
-            TriggersSettingsPage()
+            TriggersSettingsPage(trigger: trigger)
         case .general:
             GeneralSettingsPage()
         case .about:
@@ -91,11 +96,6 @@ private struct SettingsPlaceholderPage: View {
             .background(Color(nsColor: .windowBackgroundColor))
     }
 }
-
-struct TriggersSettingsPage: View {
-    var body: some View { SettingsPlaceholderPage() }
-}
-
 
 struct GeneralSettingsPage: View {
     var body: some View { SettingsPlaceholderPage() }
