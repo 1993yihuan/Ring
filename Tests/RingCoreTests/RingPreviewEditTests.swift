@@ -169,38 +169,60 @@ final class RingPreviewEditTests: XCTestCase {
         XCTAssertEqual(swappedConfig.visibleSlotCount, 5)
     }
 
-    func testSwapRefusesInvalidDropTargets() {
+    func testSwapAndMoveDropTargets() {
         let app1 = AppReference(bundleIdentifier: "b1", displayName: "App1", path: "/1.app")
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "App2", path: "/2.app")
+        let id0 = UUID(), id1 = UUID(), id2 = UUID()
         let slots = [
-            Slot(id: UUID(), app: app1),
-            Slot(id: UUID(), app: nil), // empty slot
-            Slot(id: UUID(), app: app2)
+            Slot(id: id0, app: app1),
+            Slot(id: id1, app: nil), // empty slot
+            Slot(id: id2, app: app2)
         ]
         let config = LauncherConfiguration(slots: slots, visibleSlotCount: 3).normalized()
         let geometry = RingLayout.geometry(slotCount: 3, side: 280, panelOrigin: .zero)
 
-        // 1. Drop on empty slot: dragDropTarget returns nil
+        // 1. Drop on empty slot: dragDropTarget returns index 1
         let emptyCenter = CGPoint(x: geometry.iconFrames[1].midX, y: geometry.iconFrames[1].midY)
-        XCTAssertNil(RingPreviewLayoutHelper.dragDropTarget(at: emptyCenter, in: geometry, slots: config.visibleSlots, sourceIndex: 0))
+        XCTAssertEqual(RingPreviewLayoutHelper.dragDropTarget(at: emptyCenter, in: geometry, slots: config.visibleSlots, sourceIndex: 0), 1)
 
-        // 2. Drop on self: dragDropTarget returns nil
+        // 2. Drop on another occupied slot: dragDropTarget returns index 2
+        let occupiedCenter = CGPoint(x: geometry.iconFrames[2].midX, y: geometry.iconFrames[2].midY)
+        XCTAssertEqual(RingPreviewLayoutHelper.dragDropTarget(at: occupiedCenter, in: geometry, slots: config.visibleSlots, sourceIndex: 0), 2)
+
+        // 3. Drop on self: dragDropTarget returns nil
         let selfCenter = CGPoint(x: geometry.iconFrames[0].midX, y: geometry.iconFrames[0].midY)
         XCTAssertNil(RingPreviewLayoutHelper.dragDropTarget(at: selfCenter, in: geometry, slots: config.visibleSlots, sourceIndex: 0))
 
-        // 3. Drop outside: dragDropTarget returns nil
+        // 4. Drop outside: dragDropTarget returns nil
         let outsidePoint = CGPoint(x: -50, y: -50)
         XCTAssertNil(RingPreviewLayoutHelper.dragDropTarget(at: outsidePoint, in: geometry, slots: config.visibleSlots, sourceIndex: 0))
 
-        // 4. RingPreviewSlotSwap refuses swapping with empty slot
-        let swapWithEmpty = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 1)
-        XCTAssertEqual(swapWithEmpty, config, "与空槽互换必须无操作并保持原配置")
+        // 5. Move occupied slot 0 to empty slot 1: slot 1 gets App1, slot 0 becomes nil, IDs preserved
+        let movedToEmpty = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 1)
+        XCTAssertEqual(movedToEmpty.slots[0].id, id0)
+        XCTAssertNil(movedToEmpty.slots[0].app, "原槽位必须变为空位")
+        XCTAssertEqual(movedToEmpty.slots[1].id, id1)
+        XCTAssertEqual(movedToEmpty.slots[1].app?.displayName, "App1", "空位目标必须获得移动的应用")
+        XCTAssertEqual(movedToEmpty.slots[2].id, id2)
+        XCTAssertEqual(movedToEmpty.slots[2].app?.displayName, "App2", "其余槽位保持不变")
 
-        // 5. RingPreviewSlotSwap refuses swapping with self
+        // 6. Swap occupied slot 0 with occupied slot 2: both apps swapped
+        let swappedOccupied = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 2)
+        XCTAssertEqual(swappedOccupied.slots[0].id, id0)
+        XCTAssertEqual(swappedOccupied.slots[0].app?.displayName, "App2")
+        XCTAssertEqual(swappedOccupied.slots[2].id, id2)
+        XCTAssertEqual(swappedOccupied.slots[2].app?.displayName, "App1")
+        XCTAssertNil(swappedOccupied.slots[1].app)
+
+        // 7. RingPreviewSlotSwap refuses dragging from an empty source slot
+        let dragFromEmpty = RingPreviewSlotSwap.swap(in: config, source: 1, destination: 2)
+        XCTAssertEqual(dragFromEmpty, config, "从空槽拖动必须无操作并保持原配置")
+
+        // 8. RingPreviewSlotSwap refuses swapping with self
         let swapWithSelf = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 0)
         XCTAssertEqual(swapWithSelf, config, "自身互换必须无操作")
 
-        // 6. RingPreviewSlotSwap refuses out-of-bounds indices
+        // 9. RingPreviewSlotSwap refuses out-of-bounds indices
         let swapOutOfBounds = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 99)
         XCTAssertEqual(swapOutOfBounds, config, "越界互换必须无操作")
     }
@@ -256,5 +278,42 @@ final class RingPreviewEditTests: XCTestCase {
         XCTAssertEqual(reloaded.slots[0].app?.displayName, "Second")
         XCTAssertEqual(reloaded.slots[1].id, id2)
         XCTAssertEqual(reloaded.slots[1].app?.displayName, "First")
+    }
+
+    func testMoveToEmptyAndSaveRoundTrip() throws {
+        let testDir = testScratchDirectory()
+        defer { try? FileManager.default.removeItem(at: testDir) }
+
+        let store = SlotStore(directory: testDir)
+        let id1 = UUID(), id2 = UUID(), id3 = UUID(), id4 = UUID()
+        let app1 = AppReference(bundleIdentifier: "b1", displayName: "First", path: "/First.app")
+        let hiddenApp = AppReference(bundleIdentifier: "b4", displayName: "HiddenApp", path: "/Hidden.app")
+
+        let config = LauncherConfiguration(slots: [
+            Slot(id: id1, app: app1),
+            Slot(id: id2, app: nil),
+            Slot(id: id3, app: nil),
+            Slot(id: id4, app: hiddenApp)
+        ], visibleSlotCount: 3).normalized()
+        try store.save(config)
+
+        let loaded = try store.load()
+        // Move slot 0 (First) to empty slot 1
+        let moved = RingPreviewSlotSwap.swap(in: loaded, source: 0, destination: 1)
+        try store.save(moved)
+
+        let reloaded = try store.load()
+        // Slot 0 is now empty, retains id1
+        XCTAssertEqual(reloaded.slots[0].id, id1)
+        XCTAssertNil(reloaded.slots[0].app)
+        // Slot 1 now holds First, retains id2
+        XCTAssertEqual(reloaded.slots[1].id, id2)
+        XCTAssertEqual(reloaded.slots[1].app?.displayName, "First")
+        // Slot 2 untouched
+        XCTAssertEqual(reloaded.slots[2].id, id3)
+        XCTAssertNil(reloaded.slots[2].app)
+        // Slot 3 (hidden tail) untouched
+        XCTAssertEqual(reloaded.slots[3].id, id4)
+        XCTAssertEqual(reloaded.slots[3].app?.displayName, "HiddenApp")
     }
 }

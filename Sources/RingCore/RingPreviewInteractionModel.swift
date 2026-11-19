@@ -119,15 +119,14 @@ public enum RingPreviewLayoutHelper {
         return .none
     }
 
-    /// Finds valid drop target among occupied slots other than the dragged source.
-    /// Dropping on self, empty slots, or outside returns nil.
+    /// Finds valid drop target among visible slots other than the dragged source.
+    /// Dropping on self or outside returns nil.
     public static func dragDropTarget(at localPoint: CGPoint,
                                       in geometry: RingGeometry,
                                       slots: [Slot],
                                       sourceIndex: Int) -> Int? {
         for index in 0..<min(geometry.iconFrames.count, slots.count) {
             guard index != sourceIndex else { continue }
-            guard slots[index].app != nil else { continue } // Cannot swap with empty slot
             let hitFrame = geometry.iconFrames[index]
             if hitFrame.contains(localPoint) {
                 return index
@@ -137,11 +136,13 @@ public enum RingPreviewLayoutHelper {
     }
 }
 
-/// Swaps the applications of two occupied slots in a configuration directly.
+/// Swaps or moves applications between preview slots in a configuration directly.
 public enum RingPreviewSlotSwap {
-    /// Swaps slots[sourceIndex].app and slots[destinationIndex].app.
+    /// Swaps or moves slots[sourceIndex].app and slots[destinationIndex].app.
+    /// - If destination is occupied, swaps both applications.
+    /// - If destination is empty, moves the source application to destination, leaving source empty (app = nil).
     /// Preserves slot UUIDs and all other slots (visible and hidden).
-    /// If either slot is empty, out of visible bounds, or same index, returns configuration unchanged.
+    /// If source is empty, out of visible bounds, or same index, returns configuration unchanged.
     public static func swap(in config: LauncherConfiguration,
                             source sourceIndex: Int,
                             destination destIndex: Int) -> LauncherConfiguration {
@@ -157,12 +158,12 @@ public enum RingPreviewSlotSwap {
             return normalized
         }
 
-        // Both must be occupied
-        guard let sourceApp = slots[sourceIndex].app,
-              let destApp = slots[destIndex].app else {
+        // Source must be occupied
+        guard let sourceApp = slots[sourceIndex].app else {
             return normalized
         }
 
+        let destApp = slots[destIndex].app
         slots[sourceIndex].app = destApp
         slots[destIndex].app = sourceApp
 

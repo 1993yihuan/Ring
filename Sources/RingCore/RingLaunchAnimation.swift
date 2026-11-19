@@ -66,6 +66,52 @@ public enum RingLaunchAnimation {
     public static func highlightDuration(reduceMotion: Bool) -> TimeInterval {
         reduceMotion ? 0 : highlightSeconds
     }
+
+    // MARK: - Highlight rotation & shortest arc
+
+    /// The target z-rotation angle (in radians) for a slot relative to slot 0 at 12 o'clock.
+    ///
+    /// In an unflipped AppKit/CA layer space (y-up):
+    /// - 12 o'clock sits at Cartesian angle +pi/2 (slot 0).
+    /// - Slots advance clockwise around the face (slot 1 at ~1 o'clock, etc.).
+    /// - In right-handed CA layer space, rotation around +z is counter-clockwise (positive)
+    ///   and clockwise (negative).
+    /// - Therefore, advancing clockwise decreases the angle: slot s sits at `-s * (2*pi / count)`.
+    public static func slotAngle(slot: Int, count: Int) -> Double {
+        guard count > 0 else { return 0 }
+        let step = 2 * Double.pi / Double(count)
+        let normalizedSlot = ((slot % count) + count) % count
+        return -Double(normalizedSlot) * step
+    }
+
+    /// The shortest signed angular difference (in radians) to rotate from `fromAngle` to `toAngle`.
+    ///
+    /// - Negative delta indicates clockwise rotation (-z).
+    /// - Positive delta indicates counter-clockwise rotation (+z).
+    /// - Crosses 12 o'clock: 11 o'clock to 1 o'clock yields negative delta (clockwise).
+    /// - Crosses 12 o'clock: 1 o'clock to 11 o'clock yields positive delta (counter-clockwise).
+    /// - When equal distance (180° / pi radians): deterministically resolves to clockwise (-pi).
+    public static func shortestArcDelta(from fromAngle: Double, to toAngle: Double) -> Double {
+        var delta = (toAngle - fromAngle).truncatingRemainder(dividingBy: 2 * Double.pi)
+        if delta > Double.pi {
+            delta -= 2 * Double.pi
+        } else if delta < -Double.pi {
+            delta += 2 * Double.pi
+        }
+        // Deterministic 180° tie-break: always choose clockwise (-pi)
+        if abs(abs(delta) - Double.pi) < 1e-9 {
+            delta = -Double.pi
+        }
+        return delta
+    }
+
+    /// Returns the continuous target rotation angle starting from `currentAngle` moving along the
+    /// shortest arc to `targetSlot`'s canonical angle.
+    public static func shortestArcTarget(from currentAngle: Double, targetSlot: Int, count: Int) -> Double {
+        let base = slotAngle(slot: targetSlot, count: count)
+        let delta = shortestArcDelta(from: currentAngle, to: base)
+        return currentAngle + delta
+    }
 }
 
 /// Which part of its own show or hide the panel is in.

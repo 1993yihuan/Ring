@@ -40,9 +40,12 @@ final class RingMaterialView: NSView {
     private var geometry: RingGeometry?
     private var grainPixels = CGSize.zero
     private var grainScale: CGFloat = 0
+    private var lastSelectedSlot: Int?
+    private var currentHighlightAngle: Double = 0
     /// The exit fades the panel's shared layer, not this one: the icons are a sibling view.
     private static let panelFadeKey = "ring.panel.exit"
     private static let highlightFadeKey = "ring.highlight.opacity"
+    private static let highlightRotateKey = "ring.highlight.rotate"
 
     /// Which slot the pointer is on. The wash moves; the icons never do.
     var selectedSlot: Int? {
@@ -166,9 +169,21 @@ final class RingMaterialView: NSView {
             mask.fillColor = nil
             mask.strokeColor = NSColor.black.cgColor
         }
-        // A shape layer rasterises into its own bounds: without the frame it would draw
-        // nothing at all, and layoutWash only writes its path.
-        wash.frame = washHost.bounds
+        let anchor = CGPoint(x: bounds.width > 0 ? centre.x / bounds.width : 0.5,
+                             y: bounds.height > 0 ? centre.y / bounds.height : 0.5)
+        wash.bounds = washHost.bounds
+        wash.anchorPoint = anchor
+        wash.position = centre
+
+        let count = geometry.iconFrames.count
+        let inset = RingPresentation.selectionInset * unit
+        wash.path = RingPresentation.selectionSectorPath(
+            centre: centre,
+            direction: RingLayout.slotOffset(0, count: count),
+            innerRadius: RingPresentation.innerRadius(plateRect: plate) + inset,
+            outerRadius: plate.width / 2 - inset,
+            halfAngle: RingPresentation.selectionHalfAngle(slotCount: count),
+            cornerRadius: RingPresentation.selectionCornerRadius * unit)
         tint.frame = material.bounds
         grain.frame = material.bounds
         if grainPixels != material.bounds.size || grainScale != scale {
@@ -281,53 +296,139 @@ final class RingMaterialView: NSView {
     /// wash stays at the value the model already holds.
     func finishHighlight() {
         washHost.removeAnimation(forKey: Self.highlightFadeKey)
+        wash.removeAnimation(forKey: Self.highlightRotateKey)
     }
 
+    /// Current visible rotation angle in radians (sampled from presentation layer if running, otherwise model).
+    var currentWashRotationAngle: Double {
+        if let presentation = wash.presentation(),
+           let num = presentation.value(forKeyPath: "transform.rotation.z") as? NSNumber {
+            return num.doubleValue
+        }
+        if let num = wash.value(forKeyPath: "transform.rotation.z") as? NSNumber {
+            return num.doubleValue
+        }
+        return currentHighlightAngle
+    }
+
+    var washLayer: CAShapeLayer { wash }
+    var washHostLayer: CALayer { washHost }
+
     /// The pad is the selected slot's own sector of the band, narrow at the hole and wide at
-    /// the outer edge, with rounded corners. A new target is a 50 ms fade only: the icons and
-    /// the hit frames stay where they are, so the target under the pointer never moves.
-    /// `animate` says a target really changed. A layout for the same target — every
-    /// settings preview draw, a re-prepare, a resize — writes the values and animates
-    /// nothing, so the shared drawing stays static where it is not the launcher.
+    /// the outer edge, with rounded corners. Moving between slots rotates the static sector
+    /// along the shortest arc around the ring centre.
     private func layoutWash(animate: Bool) {
         guard let geometry else { return }
-        let plate = geometry.plateRect
-        let unit = RingPresentation.unit(plateRect: plate)
-        let centre = CGPoint(x: plate.midX, y: plate.midY)
-        // One transaction with no early return: every layer write stays inside it, so the
-        // no-animation guarantee is structural rather than a control-flow argument.
         let slot = selectedSlot.flatMap { geometry.iconFrames.indices.contains($0) ? $0 : nil }
+        let oldSlot = lastSelectedSlot
+        lastSelectedSlot = slot
+
+        let count = geometry.iconFrames.count
+        guard count > 0 else { return }
+
         let duration = animate ? RingLaunchAnimation.highlightDuration(
             reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion) : 0
-        if !animate { washHost.removeAnimation(forKey: Self.highlightFadeKey) }
-        // What the highlight shows right now, before this write: a rapid sweep re-targets
-        // from the frame on screen rather than from the previous model value.
-        let fromOpacity = washHost.presentation()?.opacity ?? washHost.opacity
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        washHost.opacity = slot == nil ? 0 : 1
-        if let slot {
-            let count = geometry.iconFrames.count
-            let inset = RingPresentation.selectionInset * unit
-            wash.path = RingPresentation.selectionSectorPath(
-                centre: centre,
-                direction: RingLayout.slotOffset(slot, count: count),
-                innerRadius: RingPresentation.innerRadius(plateRect: plate) + inset,
-                outerRadius: plate.width / 2 - inset,
-                halfAngle: RingPresentation.selectionHalfAngle(slotCount: count),
-                cornerRadius: RingPresentation.selectionCornerRadius * unit)
-        }
-        CATransaction.commit()
 
-        guard duration > 0 else { return }
-        let fade = CABasicAnimation(keyPath: "opacity")
-        // A new target appears where it now is, so it fades in from 0 there; a cleared one
-        // fades out from what is on screen. Either way the wash itself does not travel.
-        fade.fromValue = slot == nil ? fromOpacity : 0
-        fade.toValue = washHost.opacity
-        fade.duration = duration
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        washHost.add(fade, forKey: Self.highlightFadeKey)
+        if !animate || duration <= 0 {
+            washHost.removeAnimation(forKey: Self.highlightFadeKey)
+            wash.removeAnimation(forKey: Self.highlightRotateKey)
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            washHost.opacity = slot == nil ? 0 : 1
+            if let slot {
+                let targetAngle = RingLaunchAnimation.slotAngle(slot: slot, count: count)
+                currentHighlightAngle = targetAngle
+                wash.setValue(targetAngle, forKeyPath: "transform.rotation.z")
+            } else {
+                currentHighlightAngle = 0
+                wash.setValue(0, forKeyPath: "transform.rotation.z")
+            }
+            CATransaction.commit()
+            return
+        }
+
+        // Animated transitions (duration > 0):
+        if let slot {
+            if let _ = oldSlot {
+                // Moving between selected slots: rotate continuously along the shortest arc.
+                let currentAngle: Double
+                if let presentation = wash.presentation(),
+                   let num = presentation.value(forKeyPath: "transform.rotation.z") as? NSNumber {
+                    currentAngle = num.doubleValue
+                } else if let num = wash.value(forKeyPath: "transform.rotation.z") as? NSNumber {
+                    currentAngle = num.doubleValue
+                } else {
+                    currentAngle = currentHighlightAngle
+                }
+
+                let targetAngle = RingLaunchAnimation.shortestArcTarget(from: currentAngle, targetSlot: slot, count: count)
+                currentHighlightAngle = targetAngle
+
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                washHost.opacity = 1
+                wash.setValue(targetAngle, forKeyPath: "transform.rotation.z")
+                CATransaction.commit()
+
+                let rotateAnim = CABasicAnimation(keyPath: "transform.rotation.z")
+                rotateAnim.fromValue = currentAngle
+                rotateAnim.toValue = targetAngle
+                rotateAnim.duration = duration
+                rotateAnim.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                wash.add(rotateAnim, forKey: Self.highlightRotateKey)
+
+                // If washHost was fading, bring it fully to 1
+                let currentOpacity = washHost.presentation()?.opacity ?? washHost.opacity
+                if currentOpacity < 0.99 {
+                    let fade = CABasicAnimation(keyPath: "opacity")
+                    fade.fromValue = currentOpacity
+                    fade.toValue = 1
+                    fade.duration = duration
+                    fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    washHost.add(fade, forKey: Self.highlightFadeKey)
+                } else {
+                    washHost.removeAnimation(forKey: Self.highlightFadeKey)
+                }
+            } else {
+                // Appearing from nil: place at target slot and fade in opacity
+                wash.removeAnimation(forKey: Self.highlightRotateKey)
+                washHost.removeAnimation(forKey: Self.highlightFadeKey)
+
+                let targetAngle = RingLaunchAnimation.slotAngle(slot: slot, count: count)
+                currentHighlightAngle = targetAngle
+
+                let fromOpacity = washHost.presentation()?.opacity ?? 0
+
+                CATransaction.begin()
+                CATransaction.setDisableActions(true)
+                wash.setValue(targetAngle, forKeyPath: "transform.rotation.z")
+                washHost.opacity = 1
+                CATransaction.commit()
+
+                let fade = CABasicAnimation(keyPath: "opacity")
+                fade.fromValue = fromOpacity
+                fade.toValue = 1
+                fade.duration = duration
+                fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                washHost.add(fade, forKey: Self.highlightFadeKey)
+            }
+        } else {
+            // Clearing to nil (pointer moved to centre or outside): fade out opacity
+            washHost.removeAnimation(forKey: Self.highlightFadeKey)
+            let fromOpacity = washHost.presentation()?.opacity ?? washHost.opacity
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            washHost.opacity = 0
+            CATransaction.commit()
+
+            let fade = CABasicAnimation(keyPath: "opacity")
+            fade.fromValue = fromOpacity
+            fade.toValue = 0
+            fade.duration = duration
+            fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            washHost.add(fade, forKey: Self.highlightFadeKey)
+        }
     }
 
     private func circle(centre: CGPoint, radius: CGFloat) -> CGPath {
