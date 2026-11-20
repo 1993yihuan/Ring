@@ -269,7 +269,7 @@ struct GeneralSettingsPage: View {
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                SettingsPageHeading(title: "通用设置", subtitle: "本地配置文件与菜单栏运行方式")
+                SettingsPageHeading(title: "通用设置", subtitle: "本地配置文件、菜单栏运行方式与触控反馈偏好")
 
                 SettingsCard {
                     VStack(alignment: .leading, spacing: 16) {
@@ -311,6 +311,33 @@ struct GeneralSettingsPage: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
                                 .background(Capsule().fill(Color.black.opacity(0.05)))
+                        }
+
+                        Rectangle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(height: 1)
+
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("触控板轻微震动反馈")
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundColor(HTMLSpecs.textColor)
+                                Text("指针划过不同环形槽位时触发 Force Touch 触感反馈")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 16)
+                            Toggle(isOn: Binding(
+                                get: { model.hapticFeedbackEnabled },
+                                set: { model.setHapticFeedbackEnabled($0) }
+                            )) {
+                                Text("触控板轻微震动反馈")
+                            }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(HTMLSpecs.accentBlue)
+                            .accessibilityLabel("触控板轻微震动反馈")
                         }
                     }
                 }

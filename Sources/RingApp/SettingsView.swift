@@ -1606,6 +1606,7 @@ final class SettingsModel: ObservableObject {
     @Published var entranceDurationMilliseconds: Int
     @Published var entranceDurationText: String
     @Published var entranceDurationError: String?
+    @Published var hapticFeedbackEnabled: Bool
     @Published var lastError: String?
     @Published var activePickerTarget: PickerTarget?
 
@@ -1619,6 +1620,7 @@ final class SettingsModel: ObservableObject {
         self.visibleSlotCount = self.config.visibleSlotCount
         self.entranceDurationMilliseconds = self.config.entranceDurationMilliseconds
         self.entranceDurationText = String(self.config.entranceDurationMilliseconds)
+        self.hapticFeedbackEnabled = self.config.hapticFeedbackEnabled
         self.store = store
     }
 
@@ -1699,6 +1701,12 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
+    func setHapticFeedbackEnabled(_ enabled: Bool) {
+        guard enabled != hapticFeedbackEnabled else { return }
+        hapticFeedbackEnabled = enabled
+        commit()
+    }
+
     func save() {
         commit()
     }
@@ -1720,11 +1728,13 @@ final class SettingsModel: ObservableObject {
         updated.slots = slots
         updated.visibleSlotCount = visibleSlotCount
         updated.entranceDurationMilliseconds = entranceDurationMilliseconds
+        updated.hapticFeedbackEnabled = hapticFeedbackEnabled
         do {
             let normalized = updated.normalized()
             try store.save(normalized)
             config = normalized
             slots = normalized.slots
+            hapticFeedbackEnabled = normalized.hapticFeedbackEnabled
             entranceDurationMilliseconds = normalized.entranceDurationMilliseconds
             entranceDurationText = String(normalized.entranceDurationMilliseconds)
             lastError = nil
@@ -1734,6 +1744,7 @@ final class SettingsModel: ObservableObject {
             visibleSlotCount = config.visibleSlotCount
             entranceDurationMilliseconds = config.entranceDurationMilliseconds
             entranceDurationText = String(entranceDurationMilliseconds)
+            hapticFeedbackEnabled = config.hapticFeedbackEnabled
             lastError = "未保存：\(error.localizedDescription)"
         }
     }

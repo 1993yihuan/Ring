@@ -65,6 +65,7 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
     /// shipped with. 0 means it appears at once.
     public static let defaultEntranceDurationMilliseconds = 140
     public static let entranceDurationRange = 0...2000
+    public static let defaultHapticFeedbackEnabled = true
 
     public var version: Int
     public var slots: [Slot]
@@ -73,22 +74,27 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
     public var visibleSlotCount: Int
     /// How long the ring takes to open, in whole milliseconds. 0 shows it at once.
     public var entranceDurationMilliseconds: Int
+    /// Whether crossing into a newly highlighted configured slot triggers subtle trackpad feedback.
+    public var hapticFeedbackEnabled: Bool
 
     public init(version: Int = LauncherConfiguration.schemaVersion,
                 slots: [Slot],
                 visibleSlotCount: Int = LauncherConfiguration.defaultVisibleSlotCount,
-                entranceDurationMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds) {
+                entranceDurationMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds,
+                hapticFeedbackEnabled: Bool = LauncherConfiguration.defaultHapticFeedbackEnabled) {
         self.version = version
         self.slots = slots
         self.visibleSlotCount = visibleSlotCount
         self.entranceDurationMilliseconds = entranceDurationMilliseconds
+        self.hapticFeedbackEnabled = hapticFeedbackEnabled
     }
 
     public static func empty(capacity: Int = LauncherConfiguration.slotCapacity,
                              visibleSlotCount: Int? = nil) -> LauncherConfiguration {
         LauncherConfiguration(slots: (0..<capacity).map { _ in Slot() },
                               visibleSlotCount: visibleSlotCount ?? capacity,
-                              entranceDurationMilliseconds: LauncherConfiguration.defaultEntranceDurationMilliseconds)
+                              entranceDurationMilliseconds: LauncherConfiguration.defaultEntranceDurationMilliseconds,
+                              hapticFeedbackEnabled: LauncherConfiguration.defaultHapticFeedbackEnabled)
     }
 
     /// The milliseconds a user's text really means, or nil when it is not a whole number
@@ -124,7 +130,8 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         return LauncherConfiguration(version: LauncherConfiguration.schemaVersion,
                                      slots: result,
                                      visibleSlotCount: visible,
-                                     entranceDurationMilliseconds: entrance)
+                                     entranceDurationMilliseconds: entrance,
+                                     hapticFeedbackEnabled: hapticFeedbackEnabled)
     }
 
     public func validate() throws {
@@ -157,6 +164,7 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         case slots
         case visibleSlotCount
         case entranceDurationMilliseconds
+        case hapticFeedbackEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -169,6 +177,8 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         // timing they were built with. A wrong type still fails to decode.
         entranceDurationMilliseconds = try container.decodeIfPresent(Int.self, forKey: .entranceDurationMilliseconds)
             ?? LauncherConfiguration.defaultEntranceDurationMilliseconds
+        hapticFeedbackEnabled = try container.decodeIfPresent(Bool.self, forKey: .hapticFeedbackEnabled)
+            ?? LauncherConfiguration.defaultHapticFeedbackEnabled
     }
 
     public func encoded() throws -> Data {

@@ -170,6 +170,7 @@ public enum RingPreviewSlotSwap {
         return LauncherConfiguration(version: normalized.version,
                                      slots: slots,
                                      visibleSlotCount: normalized.visibleSlotCount,
-                                     entranceDurationMilliseconds: normalized.entranceDurationMilliseconds)
+                                     entranceDurationMilliseconds: normalized.entranceDurationMilliseconds,
+                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled)
     }
 }

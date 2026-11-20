@@ -3,6 +3,14 @@ import CoreGraphics
 import RingCore
 import SwiftUI
 
+struct SystemHapticFeedbackPerformer: RingHapticFeedbackPerforming {
+    func performAlignmentFeedback() {
+        // Immediate alignment feedback avoids backlog during fast pointer sweeps and degrades
+        // silently to a no-op when Force Touch hardware is unavailable.
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+}
+
 final class AppCoordinator: NSObject, NSApplicationDelegate {
     private let monitor = OptionPollingMonitor()
     private let launcher = Launcher()
@@ -10,15 +18,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var trigger: TriggerController?
     private let hotKey = HotKeyMonitor()
     private var recognizer = OptionDoubleTapRecognizer()
-    private let session = RingSession()
+    let session = RingSession()
+    private var hapticTracker = RingHapticFeedbackState()
+    private let hapticPerformer: any RingHapticFeedbackPerforming
     private let panel = RingPanel()
     private let overlay = RingOverlayPanel()
     private var overlayView: RingOverlayView?
     /// The screen the ring was opened on: the only place a click may launch or cancel.
-    private var activeScreenFrame: CGRect?
+    var activeScreenFrame: CGRect?
     /// Which entry opened the ring. The Option gesture releases to launch; the menu entry
     /// clicks, and keeps the whole-screen angular rule.
-    private var inputMode: RingInputMode = .angularClick
+    var inputMode: RingInputMode = .angularClick
     /// A click collapsed the gesture but its release has not been consumed yet: the overlay
     /// stays until then so that release cannot reach the app behind it.
     private var keepingOverlayForRelease = false
@@ -38,6 +48,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// The panel's own entrance and exit, with the generation that tells an old completion
     /// from the round now on screen.
     private var launch = RingLaunchState()
+
+    init(hapticPerformer: any RingHapticFeedbackPerforming = SystemHapticFeedbackPerformer()) {
+        self.hapticPerformer = hapticPerformer
+        super.init()
+    }
 
     private func now() -> TimeInterval { ProcessInfo.processInfo.systemUptime }
 
@@ -304,8 +319,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     // MARK: - Ring panel
 
-    private func showRing(mode: RingInputMode) {
+    func showRing(mode: RingInputMode) {
         guard session.trigger() else { return }
+        hapticTracker.reset()
         // The mode belongs to this visible ring, so it is set only once the ring is really
         // up. A refused trigger (ring already visible) returns above and changes nothing.
         inputMode = mode
@@ -341,7 +357,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         return (screens[index].frame, geometry)
     }
 
-    private func presentPanel(geometry: RingGeometry) {
+    func presentPanel(geometry: RingGeometry) {
         let view = ringView ?? RingView(frame: .zero)
         let items = session.slots.map { slot in
             RingView.Item(name: slot.app?.displayName ?? "",
@@ -367,6 +383,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         // This one entry point serves the Option gesture, the menu item and a quick reopen
         // alike. The icons are complete before the window is ordered front; the plate starts
         // at the entrance's first frame, and only the plate itself then moves.
+        hapticTracker.reset()
         materialView.selectedSlot = nil
         materialView.prepare(geometry: geometry)
         view.present(geometry: geometry,
@@ -482,22 +499,31 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// One move, from one named source. `RingPointerRouting` decides whether that source may
     /// drive the highlight in the current mode, so a queued global move cannot overwrite the
     /// overlay's newer position (or the other way round).
-    private func pointerMoved(to point: CGPoint, from source: RingPointerSource) {
+    func pointerMoved(to point: CGPoint, from source: RingPointerSource) {
         guard RingPointerRouting.acceptsMove(from: source, mode: inputMode, ringVisible: session.isVisible),
               let decision = currentDecision(at: point) else { return }
         show(decision: decision)
+        if hapticTracker.handlePointerUpdate(decision: decision,
+                                             slots: session.slots,
+                                             isRingVisible: session.isVisible,
+                                             isEnabled: session.config.hapticFeedbackEnabled) {
+            hapticPerformer.performAlignmentFeedback()
+        }
     }
 
     /// The highlight lives in two views: the icon that grows and the wash on the band. One
     /// call moves both, so they can never point at different slots.
     private func show(decision: RingPointerDecision?) {
+        if decision == nil {
+            hapticTracker.reset()
+        }
         ringView?.decision = decision
         materialView.selectedSlot = decision?.slot
     }
 
     /// The release decides from where the release happened. An unknown position can only
     /// cancel: a launch is never inferred from a stale highlight.
-    private func releaseSelection(at point: CGPoint) {
+    func releaseSelection(at point: CGPoint) {
         // The release point was captured with the release event; without a ring to judge
         // it against there is nothing to launch. The ring's own circle and centre decide —
         // the gesture is not clipped to the screen the ring was opened on.
@@ -517,7 +543,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// A press while the gesture is holding ends the gesture immediately. The overlay is
     /// kept until that press's release has been consumed, so the release cannot land on the
     /// app behind it; the ring itself is already gone.
-    private func overlayPressed() {
+    func overlayPressed() {
         guard inputMode == .holdToLaunch, session.isVisible else { return }
         keepingOverlayForRelease = true
         trigger?.hotKeyCancelled()
@@ -591,7 +617,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// Leaving the overlay matters only for the menu entry, which is limited to this screen.
     /// The gesture keeps following the pointer through the global move events, so clearing
     /// here would drop a highlight that the release would still act on.
-    private func pointerExitedOverlay() {
+    func pointerExitedOverlay() {
         guard inputMode == .angularClick else { return }
         clearHighlight()
     }
@@ -614,7 +640,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     /// Idempotent: closing an already hidden ring only re-hides the windows, so callers
     /// (Esc, overlay, outside click, a slot-count change) never leave the panel behind.
-    private func cancelRing() {
+    func cancelRing() {
         recognizer.reset()
         // A combination session ends here too, without a launch.
         trigger?.hotKeyCancelled()
@@ -724,12 +750,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             }
             let model = SettingsModel(config: session.config, store: store)
             model.onConfigChange = { [weak self] config in
-                guard let self else { return }
-                let countChanged = config.visibleSlotCount != self.session.visibleSlotCount
-                self.session.update(config: config)
-                // A visible ring was drawn for the old count: close it instead of pairing
-                // that geometry with the new slot list. The next open uses the new value.
-                if countChanged { self.cancelRing() }
+                self?.applyConfiguration(config)
             }
             settingsModel = model
             guard let trigger else {
@@ -753,6 +774,14 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             settingsWindow?.deminiaturize(nil)
         }
         settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    func applyConfiguration(_ config: LauncherConfiguration) {
+        let countChanged = config.visibleSlotCount != session.visibleSlotCount
+        session.update(config: config)
+        // A visible ring was drawn for the old count: close it instead of pairing
+        // that geometry with the new slot list. The next open uses the new value.
+        if countChanged { cancelRing() }
     }
 
     @objc private func quit() {

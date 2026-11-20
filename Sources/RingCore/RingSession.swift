@@ -118,6 +118,7 @@ public enum SlotReordering {
         // rebuild here once dropped everything the initialiser did not name.
         return LauncherConfiguration(slots: slots,
                                      visibleSlotCount: normalized.visibleSlotCount,
-                                     entranceDurationMilliseconds: normalized.entranceDurationMilliseconds)
+                                     entranceDurationMilliseconds: normalized.entranceDurationMilliseconds,
+                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled)
     }
 }
