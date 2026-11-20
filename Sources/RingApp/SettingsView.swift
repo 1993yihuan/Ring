@@ -826,6 +826,8 @@ final class RingPreviewHostView: NSView {
     private(set) var hoveredEnlargedApp: AppReference?
     private(set) var isPreviewAnimating: Bool = false
     private var trackingArea: NSTrackingArea?
+    private var isHoldingSlotCursor: Bool = false
+    private var lastKnownMouseLocalPoint: NSPoint?
 
     // 拖拽状态（4pt 阈值与内部槽位身份隔离）
     private var dragCandidateIndex: Int?
@@ -1025,8 +1027,60 @@ final class RingPreviewHostView: NSView {
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
             clearHoverEnlargement(animated: false)
+            lastKnownMouseLocalPoint = nil
+            if isDragging {
+                isDragging = false
+                dragCandidateIndex = nil
+                dragGhostLayer.isHidden = true
+                targetHighlightLayer.isHidden = true
+                NSCursor.arrow.set()
+            } else if isHoldingSlotCursor {
+                NSCursor.arrow.set()
+            }
+            isHoldingSlotCursor = false
+            window?.invalidateCursorRects(for: self)
         }
         super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed {
+            window?.invalidateCursorRects(for: self)
+            reconcileCursorAfterLayoutOrSlotsChange()
+        }
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        let changed = frame.origin != newOrigin
+        super.setFrameOrigin(newOrigin)
+        if changed {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        discardCursorRects()
+        guard !bounds.isEmpty, !isDragging else { return }
+        for i in 0..<slots.count where slots[i].app != nil {
+            let rect = slotHitRect(for: i).intersection(bounds)
+            if !rect.isNull && !rect.isEmpty {
+                addCursorRect(rect, cursor: .pointingHand)
+            }
+        }
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        lastKnownMouseLocalPoint = bounds.contains(localPoint) ? localPoint : nil
+        syncCursor(at: localPoint)
     }
 
     override func updateTrackingAreas() {
@@ -1041,6 +1095,7 @@ final class RingPreviewHostView: NSView {
     }
 
     func update(slots: [Slot]) {
+        let slotsChanged = self.slots != slots
         // 检查当前悬停放大的 slot 是否依然有效（未被删除、未位移、app 未改变）
         if let id = hoveredEnlargedSlotID, let idx = hoveredEnlargedSlotIndex, let app = hoveredEnlargedApp {
             if slots.indices.contains(idx) && slots[idx].id == id && slots[idx].app == app {
@@ -1057,6 +1112,10 @@ final class RingPreviewHostView: NSView {
             focusedSlotIndex = nil
         }
         needsLayout = true
+        if slotsChanged {
+            window?.invalidateCursorRects(for: self)
+            reconcileCursorAfterLayoutOrSlotsChange()
+        }
     }
 
     override func layout() {
@@ -1123,6 +1182,8 @@ final class RingPreviewHostView: NSView {
         updateFocusAndHub()
 
         CATransaction.commit()
+        window?.invalidateCursorRects(for: self)
+        reconcileCursorAfterLayoutOrSlotsChange()
     }
 
     private func layoutSlotLayers(cx: CGFloat, cy: CGFloat, count: Int) {
@@ -1229,18 +1290,83 @@ final class RingPreviewHostView: NSView {
         slotsContainerLayer.sublayers?.first?.masksToBounds ?? false
     }
 
-    private func slotIndex(at localPoint: NSPoint) -> Int? {
+    func slotHitRect(for index: Int) -> CGRect {
         let count = max(slots.count, 1)
         let hitSize: CGFloat = count >= 7 ? 44.0 : 52.0
+        let pt = pointForSlot(at: index)
+        return CGRect(x: pt.x - hitSize / 2, y: pt.y - hitSize / 2, width: hitSize, height: hitSize)
+    }
 
+    private func slotIndex(at localPoint: NSPoint) -> Int? {
+        let count = max(slots.count, 1)
         for i in 0..<count {
-            let pt = pointForSlot(at: i)
-            let rect = CGRect(x: pt.x - hitSize / 2, y: pt.y - hitSize / 2, width: hitSize, height: hitSize)
-            if rect.contains(localPoint) {
+            if slotHitRect(for: i).contains(localPoint) {
                 return i
             }
         }
         return nil
+    }
+
+    private func isPointOverOccupiedSlot(_ localPoint: NSPoint) -> Bool {
+        guard bounds.contains(localPoint),
+              let index = slotIndex(at: localPoint),
+              slots.indices.contains(index),
+              slots[index].app != nil else {
+            return false
+        }
+        return true
+    }
+
+    private func currentLocalMousePoint() -> NSPoint? {
+        guard let window else { return nil }
+        return convert(window.mouseLocationOutsideOfEventStream, from: nil)
+    }
+
+    private func syncCursor(at localPoint: NSPoint) {
+        if isDragging {
+            NSCursor.closedHand.set()
+            isHoldingSlotCursor = false
+            return
+        }
+        if isPointOverOccupiedSlot(localPoint) {
+            NSCursor.pointingHand.set()
+            isHoldingSlotCursor = true
+        } else {
+            if isHoldingSlotCursor || bounds.contains(localPoint) {
+                NSCursor.arrow.set()
+            }
+            isHoldingSlotCursor = false
+        }
+    }
+
+    private func reconcileCursorAfterLayoutOrSlotsChange() {
+        guard !isDragging else { return }
+        if let realPoint = currentLocalMousePoint(), bounds.contains(realPoint) {
+            lastKnownMouseLocalPoint = realPoint
+            syncCursor(at: realPoint)
+            return
+        }
+
+        if let window,
+           window.isVisible,
+           let contentView = window.contentView {
+            let contentPoint = contentView.convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if contentView.bounds.contains(contentPoint) {
+                lastKnownMouseLocalPoint = nil
+                if isHoldingSlotCursor {
+                    NSCursor.arrow.set()
+                    isHoldingSlotCursor = false
+                }
+                return
+            }
+        }
+
+        if let lastPoint = lastKnownMouseLocalPoint {
+            syncCursor(at: lastPoint)
+        } else if isHoldingSlotCursor {
+            NSCursor.arrow.set()
+            isHoldingSlotCursor = false
+        }
     }
 
     private func updateFocusAndHub() {
@@ -1372,16 +1498,25 @@ final class RingPreviewHostView: NSView {
 
     override func mouseEntered(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
+        lastKnownMouseLocalPoint = bounds.contains(localPoint) ? localPoint : nil
         updateHoverEnlargement(at: localPoint)
+        syncCursor(at: localPoint)
     }
 
     override func mouseMoved(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
+        lastKnownMouseLocalPoint = bounds.contains(localPoint) ? localPoint : nil
         updateHoverEnlargement(at: localPoint)
+        syncCursor(at: localPoint)
     }
 
     override func mouseExited(with event: NSEvent) {
         clearHoverEnlargement(animated: true)
+        lastKnownMouseLocalPoint = nil
+        if !isDragging && isHoldingSlotCursor {
+            NSCursor.arrow.set()
+            isHoldingSlotCursor = false
+        }
     }
 
     // MARK: - 鼠标点击与安全拖拽
@@ -1445,7 +1580,9 @@ final class RingPreviewHostView: NSView {
                 }
                 dragGhostLayer.frame = CGRect(x: localPoint.x - 26, y: localPoint.y - 26, width: 52, height: 52)
                 dragGhostLayer.isHidden = false
+                isHoldingSlotCursor = false
                 NSCursor.closedHand.set()
+                window?.invalidateCursorRects(for: self)
             }
         }
 
@@ -1480,10 +1617,11 @@ final class RingPreviewHostView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
+        lastKnownMouseLocalPoint = bounds.contains(localPoint) ? localPoint : nil
         if isDragging {
             let source = dragCandidateIndex
             let target = slotIndex(at: localPoint)
-            cancelDrag()
+            cancelDrag(restoringCursorAt: localPoint)
             if let s = source, let t = target, s != t {
                 clearHoverEnlargement(animated: false)
                 onSwapSlots?(s, t)
@@ -1511,6 +1649,11 @@ final class RingPreviewHostView: NSView {
     }
 
     func cancelDrag() {
+        let restorePoint = currentLocalMousePoint().flatMap { bounds.contains($0) ? $0 : nil } ?? lastKnownMouseLocalPoint
+        cancelDrag(restoringCursorAt: restorePoint)
+    }
+
+    private func cancelDrag(restoringCursorAt localPoint: NSPoint?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         isDragging = false
@@ -1518,7 +1661,14 @@ final class RingPreviewHostView: NSView {
         dragGhostLayer.isHidden = true
         targetHighlightLayer.isHidden = true
         CATransaction.commit()
-        NSCursor.arrow.set()
+        if let localPoint, isPointOverOccupiedSlot(localPoint) {
+            NSCursor.pointingHand.set()
+            isHoldingSlotCursor = true
+        } else {
+            NSCursor.arrow.set()
+            isHoldingSlotCursor = false
+        }
+        window?.invalidateCursorRects(for: self)
         updateFocusAndHub()
     }
 }
