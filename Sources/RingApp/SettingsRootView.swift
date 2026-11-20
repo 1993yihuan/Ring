@@ -6,17 +6,9 @@ import SwiftUI
 /// keyboard monitoring permission flow or legacy listener configuration.
 struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
-    /// The trigger page's own model: the applier lives as long as Ring, so the page can be
-    /// opened, switched away from and reopened without losing the active binding.
     @ObservedObject var trigger: TriggerController
-    /// The updater outlives the page: switching to another sidebar page and back keeps a running
-    /// download, its progress and its result.
     @StateObject private var update: UpdateModel
-    /// Optional because a list can clear its selection; the page then falls back to the ring
-    /// rather than showing an empty detail.
     @State private var selection: SettingsSection?
-    /// Read from the running bundle by the app, so the sidebar never claims a version the build
-    /// does not have. A probe passes it in.
     private let version: String?
 
     init(model: SettingsModel,
@@ -36,119 +28,423 @@ struct SettingsRootView: View {
     var body: some View {
         HStack(spacing: 0) {
             sidebar
-            Divider()
-            detail
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                detail
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(HTMLSpecs.windowBackground)
+                SettingsFooterView(model: model)
+                    .padding(.horizontal, 24)
+                    .background(HTMLSpecs.footerBackground)
+                    .overlay(alignment: .top) {
+                        Rectangle()
+                            .fill(HTMLSpecs.footerBorder)
+                            .frame(height: 1)
+                            .allowsHitTesting(false)
+                    }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+        .background(HTMLSpecs.windowBackground)
+        .ignoresSafeArea(.container, edges: .top)
+        .preferredColorScheme(.light)
     }
 
-    /// A native sidebar: the system sidebar list with its own selection style, a fixed width of
-    /// its own (never collapsible, so a page switch and a narrow window cannot take it away), and
-    /// the running bundle's version at the bottom.
+    func makeWindow() -> NSWindow {
+        let window = NSWindow(contentViewController: NSHostingController(rootView: self))
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView]
+        window.title = "Ring 设置"
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.backgroundColor = HTMLSpecs.windowBackgroundNS
+        window.appearance = NSAppearance(named: .aqua)
+        window.isReleasedWhenClosed = false
+        return window
+    }
+
+    /// 高保真通栏毛玻璃侧边栏（对齐 HTML .mac-sidebar，宽 210pt border-box，保留顶部 48pt 原生交通灯对齐留白）
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: $selection) {
+            // 顶部 48pt 原生红黄绿交通灯对齐留白区（确保导航项从 y=48 开始，与 HTML 逐像素对齐）
+            Color.clear
+                .frame(height: 48)
+
+            // 侧边栏导航列表（使用 HTML 语义的高保真导航项，每行矩形完整支持 hover 高亮与点击，选中样式优先）
+            VStack(spacing: 4) {
                 ForEach(SettingsSection.allCases) { section in
-                    Label(section.title, systemImage: section.symbolName)
-                        .frame(minHeight: 34)
-                        .tag(section)
+                    SidebarNavItem(
+                        section: section,
+                        isSelected: (selection ?? .ring) == section,
+                        onSelect: {
+                            selection = section
+                        }
+                    )
                 }
             }
-            .listStyle(.sidebar)
-            .frame(maxHeight: .infinity)
-            if let version {
-                Text("Ring \(version)")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.bottom, 12)
+
+            Spacer()
+
+            // 侧栏底部：低对比度版本号（源 HTML 无额外横分割线）
+            HStack {
+                Text("Ring")
+                    .font(.system(size: 11, weight: .regular))
+                Spacer()
+                if let version {
+                    Text("v\(version)")
+                        .font(.system(size: 11, design: .monospaced))
+                }
             }
+            .foregroundColor(Color.black.opacity(0.40))
+            .padding(.horizontal, 16)
+            .padding(.vertical, 14)
+            .frame(maxWidth: .infinity)
         }
+        .background(Color(red: 242/255, green: 243/255, blue: 245/255))
         .frame(width: SettingsWindowGeometry.sidebarWidth)
+        .overlay(
+            Rectangle()
+                .fill(Color.black.opacity(0.07))
+                .frame(width: 1),
+            alignment: .trailing
+        )
     }
 
-    /// One exhaustive switch: a new page cannot be forgotten and a page cannot be shown under
-    /// the wrong name.
     @ViewBuilder
     private var detail: some View {
         switch page {
         case .ring:
-            SettingsView(model: model, triggerHint: trigger.previewHint)
+            SettingsView(model: model, activeTrigger: trigger.activeBinding, triggerHint: trigger.previewHint)
         case .triggers:
             TriggersSettingsPage(trigger: trigger)
         case .general:
-            GeneralSettingsPage()
+            GeneralSettingsPage(model: model)
         case .about:
-            AboutSettingsPage(update: update)
+            AboutSettingsPage(update: update, version: version)
         }
     }
 }
 
-/// The one shape the remaining placeholder pages share: the words "待开发" and nothing else — no
-/// buttons, no made-up descriptions, no version, no permission or gesture controls.
-private struct SettingsPlaceholderPage: View {
+private struct SidebarNavItem: View {
+    let section: SettingsSection
+    let isSelected: Bool
+    let onSelect: () -> Void
+    @State private var isHovered: Bool = false
+
     var body: some View {
-        Text("待开发")
-            .font(.system(size: 13))
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(nsColor: .windowBackgroundColor))
+        SidebarPointingHandRowBox {
+            Button(action: onSelect) {
+                HStack(spacing: 10) {
+                    Image(systemName: section.symbolName)
+                        .font(.system(size: 14, weight: .medium))
+                        .frame(width: 18, height: 18)
+                    Text(section.title)
+                        .font(.system(size: 13, weight: .medium))
+                    Spacer()
+                }
+                .foregroundColor(isSelected ? HTMLSpecs.textColor : (isHovered ? HTMLSpecs.textColor : Color.black.opacity(0.65)))
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .contentShape(Rectangle())
+                .background(
+                    Group {
+                        if isSelected {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color(red: 223/255, green: 223/255, blue: 225/255))
+                        } else if isHovered {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(Color.black.opacity(0.04))
+                        } else {
+                            Color.clear
+                        }
+                    }
+                )
+            }
+            .buttonStyle(.plain)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                isHovered = hovering
+            }
+            .accessibilityAddTraits(isSelected ? [.isSelected, .isButton] : [.isButton])
+            .accessibilityLabel(section.title)
+            .ignoresSafeArea()
+        }
     }
 }
 
-struct GeneralSettingsPage: View {
-    var body: some View { SettingsPlaceholderPage() }
+/// 将单行导航包裹在独立的 `NSHostingView` 子类中，使整行矩形（含选中行与右侧空白）成为 AppKit
+/// 的直接光标命中视图并由窗口框架接管 cursor rect 生命周期，防止外层 `NSHostingView.cursorUpdate` 覆写为箭头。
+private struct SidebarPointingHandRowBox<Content: View>: NSViewRepresentable {
+    let content: Content
+
+    init(@ViewBuilder content: () -> Content) {
+        self.content = content()
+    }
+
+    func makeNSView(context: Context) -> SidebarPointingHandHostingView<Content> {
+        let view = SidebarPointingHandHostingView(rootView: content)
+        view.sizingOptions = [.intrinsicContentSize]
+        view.layoutSubtreeIfNeeded()
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarPointingHandHostingView<Content>, context: Context) {
+        nsView.rootView = content
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: SidebarPointingHandHostingView<Content>, context: Context) -> CGSize? {
+        let intrinsic = nsView.fittingSize
+        return CGSize(width: proposal.width ?? intrinsic.width, height: intrinsic.height)
+    }
 }
 
-/// About: the running bundle's own version, and an update check that only runs when the user
-/// asks for one. Nothing here installs silently: a download has to be verified against the digest
-/// GitHub publishes, and the swap happens in a helper after Ring quits.
-struct AboutSettingsPage: View {
-    @ObservedObject var update: UpdateModel
+final class SidebarPointingHandHostingView<Content: View>: NSHostingView<Content> {
+    // 子 NSHostingView 不参与透明标题栏 .fullSizeContentView 的安全区叠加，避免首次打开首帧行高被撑大 32pt。
+    override var safeAreaInsets: NSEdgeInsets { NSEdgeInsets() }
+
+    override func resetCursorRects() {
+        super.resetCursorRects()
+        discardCursorRects()
+        guard !bounds.isEmpty else { return }
+        addCursorRect(bounds, cursor: .pointingHand)
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.pointingHand.set()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            window?.invalidateCursorRects(for: self)
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        window?.invalidateCursorRects(for: self)
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = frame.size != newSize
+        super.setFrameSize(newSize)
+        if changed {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+
+    override func setFrameOrigin(_ newOrigin: NSPoint) {
+        let changed = frame.origin != newOrigin
+        super.setFrameOrigin(newOrigin)
+        if changed {
+            window?.invalidateCursorRects(for: self)
+        }
+    }
+}
+
+struct SettingsPageHeading: View {
+    let title: String
+    let subtitle: String
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 12) {
-                // The page's one action lives in the title row: beside "Ring", as the reference
-                // picture asks, and above everything the notes can grow into.
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
-                    Text("Ring")
-                        .font(.system(size: 15, weight: .semibold))
-                    action
-                    Spacer(minLength: 0)
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundStyle(HTMLSpecs.textColor)
+                .frame(height: 27)
+            Text(subtitle)
+                .font(.system(size: 12.5))
+                .foregroundStyle(HTMLSpecs.textSecondary)
+                .frame(minHeight: 19, alignment: .topLeading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.bottom, 4)
+    }
+}
+
+/// 通用设置页（对齐 HTML #view-general：统一底色与卡片风格）
+struct GeneralSettingsPage: View {
+    @ObservedObject var model: SettingsModel
+
+    var body: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                SettingsPageHeading(title: "通用设置", subtitle: "本地配置文件与菜单栏运行方式")
+
+                SettingsCard {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("配置文件存储")
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundColor(HTMLSpecs.textColor)
+                                Text("槽位与触发配置保存在本地 JSON 文件中，支持直接在访达中查阅或备份。")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 16)
+                            Button("在访达中显示") {
+                                model.revealConfiguration()
+                            }
+                            .controlSize(.small)
+                        }
+
+                        Rectangle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(height: 1)
+
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("运行模式")
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundColor(HTMLSpecs.textColor)
+                                Text("Ring 保持常驻菜单栏辅助应用模式运行，无额外 Dock 栏常驻图标。")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 16)
+                            Text("常驻辅助")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(Color.black.opacity(0.65))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 3)
+                                .background(Capsule().fill(Color.black.opacity(0.05)))
+                        }
+                    }
                 }
-                Text("当前版本 \(update.currentVersionText)")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.secondary)
-                content
-                Text("更新只来自 GitHub 上的正式版本，下载后按官方摘要校验。Ring 没有 Developer ID 签名，安装后系统可能要求手动放行新版本。更新完成后 Ring 会重新打开。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(24)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(HTMLSpecs.windowBackground)
+    }
+}
+
+/// 关于页面展示当前版本和手动更新操作。
+struct AboutSettingsPage: View {
+    @ObservedObject var update: UpdateModel
+    let version: String?
+
+    init(update: UpdateModel, version: String? = nil) {
+        self.update = update
+        self.version = version
     }
 
-    /// The current phase's own button, and the only one on the page: a check, a download, a
-    /// cancel, or another check. It never moves into the notes.
+    private var currentVersionText: String {
+        version ?? update.currentVersionText
+    }
+
+    private var versionSubtitleText: String {
+        let base = "版本 \(currentVersionText)"
+        if let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String, !build.isEmpty {
+            return "\(base) (\(build))"
+        }
+        return base
+    }
+
+    var body: some View {
+        GeometryReader { viewport in
+            ScrollView(.vertical, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    identity
+                    HStack(spacing: 10) {
+                        actionButton
+                        Button("在访达中显示") {
+                            NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+                        }
+                        .buttonStyle(AboutButtonStyle())
+                    }
+                    .padding(.top, 24)
+
+                    if !updateIsIdle {
+                        content.padding(.top, 12)
+                    }
+                }
+                .padding(24)
+                .frame(maxWidth: .infinity, minHeight: viewport.size.height)
+            }
+        }
+        .background(HTMLSpecs.windowBackground)
+    }
+
+    private var appIcon: NSImage {
+        // 1. 优先使用当前 App Bundle 在访达中的系统真实图标
+        let bundlePath = Bundle.main.bundleURL.path
+        if bundlePath.hasSuffix(".app") && FileManager.default.fileExists(atPath: bundlePath) {
+            return NSWorkspace.shared.icon(forFile: bundlePath)
+        }
+        // 2. 检查应用 Info.plist 中指定的 CFBundleIconFile
+        if let iconName = Bundle.main.infoDictionary?["CFBundleIconFile"] as? String {
+            let cleanName = iconName.replacingOccurrences(of: ".icns", with: "")
+            if let path = Bundle.main.path(forResource: cleanName, ofType: "icns"),
+               let img = NSImage(contentsOfFile: path) {
+                return img
+            }
+        }
+        // 3. 回退尝试寻找包内或同一构建目录下的 Ring.app
+        let candidateApp = Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("Ring.app").path
+        if FileManager.default.fileExists(atPath: candidateApp) {
+            return NSWorkspace.shared.icon(forFile: candidateApp)
+        }
+        // 4. 系统全局应用图标回退
+        if let appImg = NSApp?.applicationIconImage, appImg.isValid {
+            return appImg
+        }
+        return NSWorkspace.shared.icon(forFile: bundlePath)
+    }
+
+    private var identity: some View {
+        VStack(spacing: 0) {
+            Image(nsImage: appIcon)
+                .resizable()
+                .frame(width: 80, height: 80)
+                .accessibilityHidden(true)
+                .padding(.bottom, 16)
+
+            Text("Ring")
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(HTMLSpecs.textColor)
+                .frame(height: 30)
+            Text(versionSubtitleText)
+                .font(.system(size: 13))
+                .foregroundStyle(HTMLSpecs.textSecondary)
+                .frame(minHeight: 19.5)
+                .padding(.top, 4)
+            Text("专为 macOS 打造的极速环形应用启动器，让高频应用切换如肌肉记忆般顺滑。")
+                .font(.system(size: 12.5))
+                .foregroundStyle(Color.black.opacity(0.60))
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 320)
+                .padding(.top, 12)
+        }
+    }
+
+    private var updateIsIdle: Bool {
+        if case .idle = update.phase { return true }
+        return false
+    }
+
     @ViewBuilder
-    private var action: some View {
+    private var actionButton: some View {
         switch update.phase {
         case .idle:
             Button("检查更新") { update.check() }
+                .buttonStyle(AboutButtonStyle(prominent: true))
         case .upToDate:
             Button("重新检查") { update.check() }
+                .buttonStyle(AboutButtonStyle())
         case .available:
-            Button("更新") { update.downloadAndInstall() }
+            Button("立即更新") { update.downloadAndInstall() }
+                .buttonStyle(AboutButtonStyle(prominent: true))
         case .downloading:
-            Button("取消") { update.cancelDownload() }
+            Button("取消下载") { update.cancelDownload() }
+                .buttonStyle(AboutButtonStyle())
         case .failed:
             Button("重新检查") { update.check() }
+                .buttonStyle(AboutButtonStyle())
         case .checking, .installing:
             EmptyView()
         }
@@ -162,50 +458,51 @@ struct AboutSettingsPage: View {
         case .checking:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("正在检查…").font(.system(size: 13))
+                Text("正在检查…").font(.system(size: 12.5))
             }
         case .upToDate(let version):
-            Text("已是最新版本（\(version.description)）").font(.system(size: 13))
+            Text("已是最新版本（\(version.description)）")
+                .font(.system(size: 12.5))
+                .foregroundColor(Color.black.opacity(0.50))
         case .available(let candidate):
             Text("有新版本 \(candidate.version.description)").font(.system(size: 13, weight: .medium))
             if !candidate.notes.isEmpty {
-                notes(candidate.notes)
+                Text(candidate.notes)
+                    .font(.system(size: 11.5))
+                    .foregroundColor(Color.black.opacity(0.55))
+                    .frame(maxWidth: 360)
             }
-            Text("更新会下载 \(candidate.asset.name)（\(ByteCountFormatter.string(fromByteCount: Int64(candidate.asset.size), countStyle: .file))），校验通过后替换当前 Ring 并重新打开。")
-                .font(.system(size: 11))
-                .foregroundStyle(.tertiary)
-                .fixedSize(horizontal: false, vertical: true)
         case .downloading(let progress):
             ProgressView(value: progress)
-                .frame(maxWidth: 320)
-            Text("正在下载 \(Int((progress * 100).rounded()))%")
-                .font(.system(size: 13))
+                .frame(maxWidth: 240)
+            Text("正在下载 \(Int((progress * 100).rounded()))%").font(.system(size: 12))
         case .installing:
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("正在安装，完成后 Ring 会重新打开。").font(.system(size: 13))
+                Text("正在安装，完成后将自动重启。").font(.system(size: 12))
             }
         case .failed(let message):
-            Text(message)
-                .font(.system(size: 12))
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(message).font(.system(size: 12)).foregroundColor(.red)
         }
     }
+}
 
-    /// Release notes live in their own scroller, capped at 180 pt: they can be read in full
-    /// without growing the page, pushing the title row away or painting over the safety hint
-    /// below them. Short notes take only the height they need.
-    private func notes(_ text: String) -> some View {
-        ScrollView {
-            Text(text)
-                .font(.system(size: 12))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .frame(maxWidth: .infinity, alignment: .topLeading)
-        .frame(maxHeight: 180)
-        .fixedSize(horizontal: false, vertical: true)
+private struct AboutButtonStyle: ButtonStyle {
+    var prominent = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(prominent ? Color.white : HTMLSpecs.textColor)
+            .padding(.horizontal, 16)
+            .frame(height: 32)
+            .background(prominent ? HTMLSpecs.accentBlue : Color.white, in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                if !prominent {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
+                }
+            }
+            .opacity(configuration.isPressed ? 0.85 : 1)
     }
 }

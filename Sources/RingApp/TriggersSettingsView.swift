@@ -15,8 +15,13 @@ struct TriggersSettingsPage: View {
     @State private var keyMonitor: Any?
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
+                SettingsPageHeading(
+                    title: "触发与手势",
+                    subtitle: "自定义唤出 Ring 环形启动器的快捷键与指针交互方式"
+                )
+
                 SettingsCard {
                     VStack(alignment: .leading, spacing: 14) {
                         Text("启动方式")
@@ -45,7 +50,7 @@ struct TriggersSettingsPage: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(HTMLSpecs.windowBackground)
         // A page that goes away, or a window that loses the keyboard, must not keep the
         // recording (and the trigger it suspended) alive.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didResignActiveNotification)) { _ in

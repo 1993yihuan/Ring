@@ -1,42 +1,53 @@
 import AppKit
 import RingCore
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// One scale for the whole window. Every gap is a multiple of 4pt so the card,
-/// the permission card and the footer line up.
-private enum Layout {
-    static let windowPadding: CGFloat = 24
-    static let sectionSpacing: CGFloat = 16
-    static let cardPadding: CGFloat = 20
+/// HTML 原型标准设计规范定义（像素级对齐 ring_macos.html 浅色模式 computed styles）
+enum HTMLSpecs {
+    // 窗口与画布
+    static let windowBackground = Color(red: 246/255, green: 246/255, blue: 248/255) // #F6F6F8
+    static let windowBackgroundNS = NSColor(red: 246/255, green: 246/255, blue: 248/255, alpha: 1.0)
+    static let textColor = Color(red: 29/255, green: 29/255, blue: 31/255) // #1D1D1F
+    static let textColorNS = NSColor(red: 29/255, green: 29/255, blue: 31/255, alpha: 1.0)
+    static let textSecondary = Color.black.opacity(0.50)
+    static let accentBlue = Color(red: 0/255, green: 122/255, blue: 255/255) // #007AFF
+    static let accentBlueNS = NSColor(red: 0/255, green: 122/255, blue: 255/255, alpha: 1.0)
+
+    // 控件卡片 (.mac-card)
+    static let cardBackground = Color.white.opacity(0.92)
+    static let cardBorder = Color.black.opacity(0.06)
     static let cardCorner: CGFloat = 12
-    static let iconSize: CGFloat = 28
-    static let footerMinHeight: CGFloat = 44
+    static let cardHeight: CGFloat = 60
+    static let cardShadowColor = Color.black.opacity(0.03)
+
+    // 外环与内孔 (#ringOuter & .ring-hole)
+    static let ringDiameter: CGFloat = 324
+    static let holeDiameter: CGFloat = 152
+    static let sectorInnerRadius: CGFloat = 76
+    static let sectorOuterRadius: CGFloat = 160
+    static let slotRadiusPercent: CGFloat = 0.362 // 324 * 0.362 = 117.288pt
+    static let sectorLineColor = Color.black.opacity(0.06)
+
+    // 底栏 (footer) - 精准对齐 HTML computed #F9F9FA
+    static let footerHeight: CGFloat = 54
+    static let footerBackground = Color(red: 249/255, green: 249/255, blue: 250/255)
+    static let footerBorder = Color.black.opacity(0.07)
 }
 
 struct SettingsView: View {
     @ObservedObject var model: SettingsModel
-    /// The sentence describes whichever trigger is configured, so the preview cannot claim
-    /// the Option gesture while the ring opens another way.
-    var triggerHint: String = "连续按两次同一侧 Option 打开环形；第二下按住时移动指针选择，松开启动。"
+    let activeTrigger: TriggerBinding
+    let triggerHint: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        // The page scrolls instead of demanding a window taller than the screen. Without
-        // this the whole layout reports a minimum height (a 1090 pt display got 1185 pt),
-        // and the window both opens past the screen and cannot be dragged back inside.
-        // `minHeight` keeps the page filling a large window exactly as before; it only
-        // matters when the window is shorter than the content.
-        GeometryReader { proxy in
-            ScrollView(.vertical) {
-                page
-                    .frame(minHeight: proxy.size.height)
-            }
+        ScrollView(.vertical, showsIndicators: false) {
+            page
+                .frame(maxWidth: .infinity)
         }
-        // A short screen must be able to hold the smallest window too: the floor is the
-        // design minimum capped by the screen the page is on.
-        .frame(minWidth: minimumSize.width, minHeight: minimumSize.height)
-        .background(Color(nsColor: .windowBackgroundColor))
-        // The layout transition is the only motion here, and it is the user's to refuse.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(HTMLSpecs.windowBackground)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.visibleSlotCount)
         .sheet(item: $model.activePickerTarget) { target in
             QuickAppPickerView(
@@ -56,136 +67,270 @@ struct SettingsView: View {
         }
     }
 
-    /// The page's own floor. Inside the settings window it is the detail column beside the
-    /// sidebar, so the same screen may hold a narrower page than the window minimum suggests.
-    private var minimumSize: CGSize {
-        let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame
-            ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
-        return SettingsWindowGeometry.detailMinimumSize(fitting: visible)
-    }
-
     private var page: some View {
-        VStack(spacing: Layout.sectionSpacing) {
-            RingMainCard(model: model, triggerHint: triggerHint)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            SettingsFooterView(model: model)
+        VStack(spacing: 0) {
+            RingMainCard(model: model, activeTrigger: activeTrigger, triggerHint: triggerHint)
+                .frame(maxWidth: .infinity)
         }
-        .padding(Layout.windowPadding)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
-// MARK: - Preview column
+// MARK: - 主设置内容卡（对齐 HTML view-ring）
 
-private enum RingPreviewButtonImageFactory {
-    static func createButtonImage(symbolName: String,
-                                  diameter: CGFloat,
-                                  backgroundColor: NSColor,
-                                  borderColor: NSColor,
-                                  symbolColor: NSColor) -> NSImage {
-        let size = NSSize(width: diameter, height: diameter)
-        return NSImage(size: size, flipped: false) { rect in
-            guard let ctx = NSGraphicsContext.current?.cgContext else { return false }
-            ctx.setFillColor(backgroundColor.cgColor)
-            ctx.fillEllipse(in: rect.insetBy(dx: 0.5, dy: 0.5))
-            ctx.setStrokeColor(borderColor.cgColor)
-            ctx.setLineWidth(1.0)
-            ctx.strokeEllipse(in: rect.insetBy(dx: 0.5, dy: 0.5))
-
-            let config = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
-                .applying(.init(paletteColors: [symbolColor]))
-            if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: nil)?
-                .withSymbolConfiguration(config) {
-                let symbolRect = CGRect(x: (diameter - symbol.size.width) / 2,
-                                        y: (diameter - symbol.size.height) / 2,
-                                        width: symbol.size.width,
-                                        height: symbol.size.height)
-                symbol.draw(in: symbolRect)
-            }
-            return true
-        }
-    }
-}
-
-private final class RingPreviewOverlayView: NSView {
-    override var isFlipped: Bool { false }
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        nil
-    }
-}
-
-/// The main settings card presenting slot capacity, entrance duration,
-/// the full-width centered circular preview, and keyboard navigation instructions.
 private struct RingMainCard: View {
     @ObservedObject var model: SettingsModel
+    let activeTrigger: TriggerBinding
     let triggerHint: String
     @FocusState private var durationFieldFocused: Bool
+    @State private var selectedSlotIndex: Int? = nil
+    @State private var durationDraft: Double = Double(LauncherConfiguration.defaultEntranceDurationMilliseconds)
+    @State private var previewScale: CGFloat = 1.0
+    @State private var previewOpacity: Double = 1.0
+    @State private var toastMessage: String?
+    @State private var showToast: Bool = false
+    @State private var isPreviewAnimating: Bool = false
+    @State private var previewGeneration: Int = 0
+    @State private var clearEnlargementTrigger: UUID = UUID()
 
     private var filledCount: Int {
         model.visibleSlots.filter { $0.app != nil }.count
     }
 
+    private var shortTriggerKey: String {
+        switch activeTrigger {
+        case .doubleTap(.command): return "双击 ⌘"
+        case .doubleTap(.option): return "双击 ⌥"
+        case .combination(let combination): return combination.displayText
+        }
+    }
+
     var body: some View {
-        SettingsCard(stretchesVertically: true) {
-            VStack(alignment: .leading, spacing: 14) {
-                // Header: Title and configured slot count
-                HStack(spacing: 8) {
-                    Text("环形槽位")
-                        .font(.system(size: 15, weight: .semibold))
-                    Spacer(minLength: 8)
-                    Text("已配置 \(filledCount) / \(model.visibleSlotCount)")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            controls
+            if let message = model.entranceDurationError {
+                Text(message)
+                    .font(.system(size: 11))
+                    .foregroundColor(.red)
+                    .padding(.bottom, 8)
+            }
+            preview
+        }
+        .onAppear {
+            durationDraft = Double(model.entranceDurationMilliseconds)
+        }
+    }
 
-                // Controls: Visible slot count segmented picker + Entrance duration field
-                HStack(alignment: .center, spacing: 20) {
-                    HStack(spacing: 8) {
-                        Text("可见位置数")
-                            .font(.system(size: 13))
-                        Picker("可见位置数", selection: Binding(get: { model.visibleSlotCount },
-                                                              set: { model.setVisibleSlotCount($0) })) {
-                            ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
-                                Text("\(count)").tag(count)
-                            }
+    private var header: some View {
+        HStack(alignment: .center, spacing: 10) {
+            Text("环形槽位")
+                .font(.system(size: 18, weight: .semibold))
+                .foregroundColor(HTMLSpecs.textColor)
+            Spacer(minLength: 8)
+
+            // 动态状态胶囊（已配置 X / Y）
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(filledCount == model.visibleSlotCount ? Color(red: 16/255, green: 185/255, blue: 129/255) : Color(red: 245/255, green: 158/255, blue: 11/255))
+                    .frame(width: 6, height: 6)
+                Text("已配置 \(filledCount) / \(model.visibleSlotCount)")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.70))
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(Color.black.opacity(0.05))
+            )
+
+            // 预览动画按钮（白底微阴影，播放图标）
+            Button(action: {
+                playRingAnimation()
+            }) {
+                HStack(spacing: 5) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 9))
+                        .foregroundColor(HTMLSpecs.accentBlue)
+                    Text("预览动画")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(HTMLSpecs.textColor)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.white)
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.08), lineWidth: 1)
+                )
+                .shadow(color: Color.black.opacity(0.03), radius: 1, x: 0, y: 1)
+            }
+            .buttonStyle(.plain)
+            .help("按当前展开时长播放圆环展开缩放动画")
+        }
+        .frame(height: 28)
+        .padding(.bottom, 16)
+    }
+
+    private var controls: some View {
+        HStack(alignment: .center, spacing: 0) {
+            // 左列：可见位置数（占 50% 对等宽度）
+            HStack(alignment: .center, spacing: 12.5) {
+                Text("可见位置数")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.80))
+                    .lineLimit(1)
+
+                HStack(spacing: 0) {
+                    ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
+                        let isSelected = count == model.visibleSlotCount
+                        Button(action: {
+                            model.setVisibleSlotCount(count)
+                            sanitizeSelection()
+                        }) {
+                            Text("\(count)")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(isSelected ? .white : Color.black.opacity(0.65))
+                                .frame(width: 28, height: 24)
+                                .background(
+                                    Group {
+                                        if isSelected {
+                                            RoundedRectangle(cornerRadius: 6, style: .circular)
+                                                .fill(HTMLSpecs.accentBlue)
+                                        } else {
+                                            Color.clear
+                                        }
+                                    }
+                                )
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                        .frame(minWidth: 160, idealWidth: 220, maxWidth: 240)
+                        .buttonStyle(.plain)
                     }
+                }
+                .padding(2)
+                .frame(width: 174, height: 30)
+                .background(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(Color.black.opacity(0.06))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .strokeBorder(Color.black.opacity(0.04), lineWidth: 1)
+                )
 
-                    HStack(spacing: 8) {
-                        Text("圆环展开时长")
-                            .font(.system(size: 13))
-                        TextField("\(LauncherConfiguration.defaultEntranceDurationMilliseconds)",
-                                  text: Binding(get: { model.entranceDurationText },
-                                                set: { model.updateEntranceDurationText($0) }))
-                            .textFieldStyle(.roundedBorder)
-                            .frame(width: 72)
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.trailing, 16)
+
+            // 中间垂直分割线（对齐 HTML lg:border-r border-black/[0.06]）
+            Rectangle()
+                .fill(Color.black.opacity(0.06))
+                .frame(width: 1, height: 32)
+
+            // 右列：展开时长（占 50% 对等宽度，滑块 + 紧凑输入字段内嵌 ms）
+            HStack(alignment: .center, spacing: 8) {
+                HStack(spacing: 4) {
+                    Text("展开时长")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(Color.black.opacity(0.80))
+                        .lineLimit(1)
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.07))
+                            .frame(width: 16, height: 16)
+                        Text("?")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color.black.opacity(0.55))
+                    }
+                    .help("0 表示立即显示（范围 0–2000 毫秒）")
+                }
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 10) {
+                    NativeCleanSlider(value: Binding(get: { durationDraft },
+                                                    set: { durationDraft = $0 }),
+                                     inRange: 0...2000,
+                                     step: 50,
+                                     onEditingChanged: { editing in
+                                         if !editing {
+                                             let intVal = Int(durationDraft)
+                                             model.updateEntranceDurationText(String(intVal))
+                                             model.commitEntranceDuration()
+                                         }
+                                     })
+                        .frame(minWidth: 60, maxWidth: 125)
+
+                    // 整个内嵌字段外框宽严格固定 70pt，ms 在右侧边框内
+                    HStack(spacing: 0) {
+                        TextField("200", text: Binding(get: { model.entranceDurationText },
+                                                       set: { text in
+                                                           model.updateEntranceDurationText(text)
+                                                           if let v = Double(text), v >= 0, v <= 2000 {
+                                                               durationDraft = v
+                                                           }
+                                                       }))
+                            .textFieldStyle(.plain)
+                            .font(.system(size: 12, weight: .medium))
+                            .multilineTextAlignment(.trailing)
+                            .frame(maxWidth: .infinity)
                             .focused($durationFieldFocused)
-                            .onSubmit { model.commitEntranceDuration() }
-                            .help("毫秒；0 表示立即显示")
-                        Text("毫秒，0…2000；0 表示立即显示")
+                            .onSubmit {
+                                model.commitEntranceDuration()
+                                durationDraft = Double(model.entranceDurationMilliseconds)
+                            }
+                        Text("ms")
                             .font(.system(size: 11))
-                            .foregroundStyle(.secondary)
+                            .foregroundColor(Color.black.opacity(0.45))
+                            .padding(.leading, 3)
                     }
-                    .onChange(of: durationFieldFocused) { focused in
-                        if !focused { model.commitEntranceDuration() }
-                    }
-
-                    Spacer(minLength: 0)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .frame(width: 70, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Color.white)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+                    )
                 }
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+            .padding(.leading, 16)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .frame(height: HTMLSpecs.cardHeight)
+        .background(
+            RoundedRectangle(cornerRadius: HTMLSpecs.cardCorner, style: .continuous)
+                .fill(HTMLSpecs.cardBackground)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: HTMLSpecs.cardCorner, style: .continuous)
+                .strokeBorder(HTMLSpecs.cardBorder, lineWidth: 1)
+        )
+        .shadow(color: HTMLSpecs.cardShadowColor, radius: 1, x: 0, y: 1)
+        .padding(.bottom, 20)
+    }
 
-                if let message = model.entranceDurationError {
-                    Text(message)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.red)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                // Centered, moderately enlarged ring preview
+    private var preview: some View {
+        VStack(spacing: 0) {
+            ZStack {
                 SlotRingPreview(slots: model.visibleSlots,
+                                selectedSlotIndex: $selectedSlotIndex,
+                                isPreviewAnimating: isPreviewAnimating,
+                                clearEnlargementTrigger: clearEnlargementTrigger,
                                 onEmptySlotClicked: { index, _ in
+                                    selectedSlotIndex = nil
                                     model.chooseApp(at: index)
                                 },
                                 onEditSlotClicked: { index, _ in
@@ -193,55 +338,434 @@ private struct RingMainCard: View {
                                 },
                                 onDeleteSlotClicked: { index, _ in
                                     model.removeApp(at: index)
+                                    if selectedSlotIndex == index {
+                                        selectedSlotIndex = nil
+                                    }
+                                    sanitizeSelection()
                                 },
                                 onSwapSlots: { source, target in
                                     model.swapApps(at: source, and: target)
+                                    if let current = selectedSlotIndex {
+                                        if current == source {
+                                            selectedSlotIndex = target
+                                        } else if current == target {
+                                            selectedSlotIndex = source
+                                        }
+                                    }
+                                    sanitizeSelection()
                                 })
-                    .frame(maxWidth: .infinity, minHeight: 340, maxHeight: .infinity)
+                    .scaleEffect(previewScale)
+                    .opacity(previewOpacity)
+                    .onChange(of: model.visibleSlots) { _ in
+                        sanitizeSelection()
+                    }
+                    .onChange(of: model.visibleSlotCount) { _ in
+                        sanitizeSelection()
+                    }
 
-                // Hints: Discoverability & Keyboard shortcuts
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("提示：可拖动槽位重排或移至空位；支持键盘 Tab / 方向键聚焦，回车更换/添加，Delete 移除，Esc 取消。减少位置数只隐藏，调大可恢复。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(triggerHint)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
+                if showToast, let toast = toastMessage {
+                    Text(toast)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 7)
+                        .background(
+                            Capsule()
+                                .fill(Color(red: 24/255, green: 24/255, blue: 27/255).opacity(0.92))
+                                .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 2)
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                        .zIndex(10)
                 }
             }
+            .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 12)
+
+            // 4. 极简快捷键提示行（短键帽 + help 完整气泡）
+            HStack(spacing: 12) {
+                Text("拖拽重排")
+                Text("·").opacity(0.4)
+                HStack(spacing: 4) {
+                    MacKbdText(key: "↵")
+                    Text("更换")
+                }
+                Text("·").opacity(0.4)
+                HStack(spacing: 4) {
+                    MacKbdText(key: "⌫")
+                    Text("移除")
+                }
+                Text("·").opacity(0.4)
+                HStack(spacing: 4) {
+                    Text("当前触发：")
+                    MacKbdText(key: shortTriggerKey)
+                }
+                .help(triggerHint)
+            }
+            .font(.system(size: 11.5))
+            .foregroundColor(HTMLSpecs.textSecondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.top, 20)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func sanitizeSelection() {
+        guard let sel = selectedSlotIndex else { return }
+        let visible = model.visibleSlots
+        guard visible.indices.contains(sel), visible[sel].app != nil else {
+            selectedSlotIndex = nil
+            return
+        }
+    }
+
+    private func playRingAnimation() {
+        // 点「预览动画」立即无动画清掉悬停放大（含 0ms 与 >0ms 路径），播放期间严格抑制悬停放大，结束后不自动跳变
+        previewGeneration += 1
+        let gen = previewGeneration
+        isPreviewAnimating = true
+        clearEnlargementTrigger = UUID()
+
+        let durationMs = model.entranceDurationMilliseconds
+        if durationMs == 0 {
+            toastMessage = "展开时长为 0 ms（立即显示）"
+            withAnimation(.easeInOut(duration: 0.15)) { showToast = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+                withAnimation(.easeInOut(duration: 0.2)) { showToast = false }
+            }
+            previewScale = 1.0
+            previewOpacity = 1.0
+            DispatchQueue.main.async {
+                guard previewGeneration == gen else { return }
+                isPreviewAnimating = false
+            }
+            return
+        }
+
+        toastMessage = "已按 \(durationMs) ms 播放展开动画"
+        withAnimation(.easeInOut(duration: 0.15)) { showToast = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
+            withAnimation(.easeInOut(duration: 0.2)) { showToast = false }
+        }
+
+        withAnimation(.none) {
+            previewScale = 0.45
+            previewOpacity = 0.0
+        }
+        let seconds = Double(durationMs) / 1000.0
+        DispatchQueue.main.async {
+            withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: seconds)) {
+                previewScale = 1.0
+                previewOpacity = 1.0
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
+            guard previewGeneration == gen else { return }
+            isPreviewAnimating = false
         }
     }
 }
 
-/// The static preview of the ring, reusing the real `RingMaterialView` and `RingView`
-/// with the exact same geometry proportions as the launcher, fitting adaptively
-/// inside the available area with drop shadows and no clipping.
+/// macOS 经典小键帽
+struct MacKbdText: View {
+    let key: String
+
+    var body: some View {
+        Text(key)
+            .font(.system(size: 11, weight: .medium))
+            .foregroundColor(Color.black.opacity(0.75))
+            .padding(.horizontal, 5)
+            .frame(minWidth: 20)
+            .frame(height: 19)
+            .background(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.white.opacity(0.85))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.06), radius: 0, x: 0, y: 1)
+    }
+}
+
+// MARK: - 原生无刻度虚线 50ms 离散步进滑块（采用零刻度 AppKit 控件 + 精准 50ms 吸附与键盘/无障碍事件）
+
+final class SnappingSlider: NSSlider {
+    var onEditingChanged: ((Bool) -> Void)?
+    var onValueChanged: ((Double) -> Void)?
+    var step: Double = 50
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        self.numberOfTickMarks = 0
+        self.isContinuous = true
+        self.target = self
+        self.action = #selector(sliderAction(_:))
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        self.numberOfTickMarks = 0
+        self.isContinuous = true
+        self.target = self
+        self.action = #selector(sliderAction(_:))
+    }
+
+    override func accessibilityValue() -> Any? {
+        return "\(Int(doubleValue)) 毫秒"
+    }
+
+    override func accessibilityLabel() -> String? {
+        return "展开时长"
+    }
+
+    private func snap(_ val: Double) -> Double {
+        let clamped = min(max(val, minValue), maxValue)
+        return (clamped / step).rounded() * step
+    }
+
+    @objc private func sliderAction(_ sender: NSSlider) {
+        let snapped = snap(sender.doubleValue)
+        if sender.doubleValue != snapped {
+            sender.doubleValue = snapped
+        }
+        onValueChanged?(snapped)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onEditingChanged?(true)
+        super.mouseDown(with: event)
+        let snapped = snap(doubleValue)
+        if doubleValue != snapped {
+            doubleValue = snapped
+        }
+        onValueChanged?(snapped)
+        onEditingChanged?(false)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        super.mouseDragged(with: event)
+        let snapped = snap(doubleValue)
+        if doubleValue != snapped {
+            doubleValue = snapped
+            onValueChanged?(snapped)
+        }
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 124 || event.keyCode == 126 { // Right / Up
+            moveRight(nil)
+        } else if event.keyCode == 123 || event.keyCode == 125 { // Left / Down
+            moveLeft(nil)
+        } else {
+            super.keyDown(with: event)
+        }
+    }
+
+    override func moveRight(_ sender: Any?) {
+        onEditingChanged?(true)
+        doubleValue = snap(doubleValue + step)
+        onValueChanged?(doubleValue)
+        onEditingChanged?(false)
+    }
+
+    override func moveLeft(_ sender: Any?) {
+        onEditingChanged?(true)
+        doubleValue = snap(doubleValue - step)
+        onValueChanged?(doubleValue)
+        onEditingChanged?(false)
+    }
+
+    override func accessibilityPerformIncrement() -> Bool {
+        onEditingChanged?(true)
+        doubleValue = snap(doubleValue + step)
+        onValueChanged?(doubleValue)
+        onEditingChanged?(false)
+        return true
+    }
+
+    override func accessibilityPerformDecrement() -> Bool {
+        onEditingChanged?(true)
+        doubleValue = snap(doubleValue - step)
+        onValueChanged?(doubleValue)
+        onEditingChanged?(false)
+        return true
+    }
+}
+
+struct NativeCleanSlider: NSViewRepresentable {
+    @Binding var value: Double
+    var inRange: ClosedRange<Double> = 0...2000
+    var step: Double = 50
+    var onEditingChanged: ((Bool) -> Void)?
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    class Coordinator: NSObject {
+        var parent: NativeCleanSlider
+        init(_ parent: NativeCleanSlider) { self.parent = parent }
+    }
+
+    func makeNSView(context: Context) -> SnappingSlider {
+        let slider = SnappingSlider(frame: .zero)
+        slider.minValue = inRange.lowerBound
+        slider.maxValue = inRange.upperBound
+        slider.doubleValue = value
+        slider.step = step
+        slider.numberOfTickMarks = 0
+        slider.tickMarkPosition = .below
+        slider.onValueChanged = { [self] val in
+            value = val
+        }
+        slider.onEditingChanged = onEditingChanged
+        return slider
+    }
+
+    func updateNSView(_ nsView: SnappingSlider, context: Context) {
+        if nsView.doubleValue != value {
+            nsView.doubleValue = value
+        }
+    }
+}
+
+// MARK: - AppKit 原生高保真交互宿主（融合全套键盘/拖拽/点击与 HTML 视觉材质）
+
 struct SlotRingPreview: View {
     let slots: [Slot]
+    @Binding var selectedSlotIndex: Int?
+    var isPreviewAnimating: Bool = false
+    var clearEnlargementTrigger: UUID?
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
     var onSwapSlots: ((Int, Int) -> Void)?
 
+    init(slots: [Slot],
+         selectedSlotIndex: Binding<Int?>? = nil,
+         isPreviewAnimating: Bool = false,
+         clearEnlargementTrigger: UUID? = nil,
+         onEmptySlotClicked: ((Int, UUID) -> Void)? = nil,
+         onEditSlotClicked: ((Int, UUID) -> Void)? = nil,
+         onDeleteSlotClicked: ((Int, UUID) -> Void)? = nil,
+         onSwapSlots: ((Int, Int) -> Void)? = nil) {
+        self.slots = slots
+        self._selectedSlotIndex = selectedSlotIndex ?? .constant(nil)
+        self.isPreviewAnimating = isPreviewAnimating
+        self.clearEnlargementTrigger = clearEnlargementTrigger
+        self.onEmptySlotClicked = onEmptySlotClicked
+        self.onEditSlotClicked = onEditSlotClicked
+        self.onDeleteSlotClicked = onDeleteSlotClicked
+        self.onSwapSlots = onSwapSlots
+    }
+
+    private var activeSelectedSlot: (index: Int, slot: Slot, app: AppReference)? {
+        guard let idx = selectedSlotIndex,
+              slots.indices.contains(idx),
+              let app = slots[idx].app else {
+            return nil
+        }
+        return (idx, slots[idx], app)
+    }
+
     var body: some View {
-        RingPreviewHostRepresentable(slots: slots,
-                                     onEmptySlotClicked: onEmptySlotClicked,
-                                     onEditSlotClicked: onEditSlotClicked,
-                                     onDeleteSlotClicked: onDeleteSlotClicked,
-                                     onSwapSlots: onSwapSlots)
+        ZStack {
+            RingPreviewHostRepresentable(slots: slots,
+                                         selectedSlotIndex: $selectedSlotIndex,
+                                         isPreviewAnimating: isPreviewAnimating,
+                                         clearEnlargementTrigger: clearEnlargementTrigger,
+                                         onEmptySlotClicked: onEmptySlotClicked,
+                                         onEditSlotClicked: onEditSlotClicked,
+                                         onDeleteSlotClicked: onDeleteSlotClicked,
+                                         onSwapSlots: onSwapSlots)
+                .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
+
+            // 中心 Hub 控件与可访问性按钮（仅当选中有效已填槽时显示详情；未选中或失效时保持完全空白）
+            centerHub
+        }
+        .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
+    }
+
+    @ViewBuilder
+    private var centerHub: some View {
+        if let selected = activeSelectedSlot {
+            VStack(spacing: 0) {
+                Text("第 \(selected.index + 1) 位")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.45))
+                    .frame(height: 16)
+                    .padding(.bottom, 2)
+
+                Text(selected.app.displayName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(HTMLSpecs.textColor)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .frame(maxWidth: 120)
+                    .frame(height: 22)
+                    .padding(.bottom, 10)
+
+                HStack(spacing: 6) {
+                    Button {
+                        onEditSlotClicked?(selected.index, selected.slot.id)
+                    } label: {
+                        Text("更换").offset(y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(HTMLSpecs.accentBlue)
+                    .frame(height: 25)
+                    .padding(.horizontal, 10)
+                    .background(
+                        Capsule()
+                            .fill(HTMLSpecs.accentBlue.opacity(0.10))
+                    )
+                    .accessibilityLabel("更换应用")
+                    .accessibilityHint("点击选择新应用替换第 \(selected.index + 1) 位")
+
+                    Button {
+                        onDeleteSlotClicked?(selected.index, selected.slot.id)
+                    } label: {
+                        Text("移除").offset(y: 1)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.65))
+                    .frame(height: 25)
+                    .padding(.horizontal, 10)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.05))
+                    )
+                    .accessibilityLabel("移除应用")
+                    .accessibilityHint("点击移除第 \(selected.index + 1) 位应用")
+                }
+            }
+            .frame(width: 128, height: 75)
             .accessibilityElement(children: .contain)
-            .accessibilityLabel("环形预览")
+            .accessibilityLabel("第 \(selected.index + 1) 槽位详情")
+        }
     }
 }
 
 private struct RingPreviewHostRepresentable: NSViewRepresentable {
     let slots: [Slot]
+    @Binding var selectedSlotIndex: Int?
+    var isPreviewAnimating: Bool
+    var clearEnlargementTrigger: UUID?
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
     var onSwapSlots: ((Int, Int) -> Void)?
+
+    class Coordinator {
+        var lastClearTrigger: UUID?
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeNSView(context: Context) -> RingPreviewHostView {
         let view = RingPreviewHostView()
@@ -249,6 +773,12 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
         view.onEditSlotClicked = onEditSlotClicked
         view.onDeleteSlotClicked = onDeleteSlotClicked
         view.onSwapSlots = onSwapSlots
+        view.onSelectedSlotChanged = { idx in
+            DispatchQueue.main.async {
+                self.selectedSlotIndex = idx
+            }
+        }
+        view.setPreviewAnimating(isPreviewAnimating)
         view.update(slots: slots)
         return view
     }
@@ -258,211 +788,250 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
         nsView.onEditSlotClicked = onEditSlotClicked
         nsView.onDeleteSlotClicked = onDeleteSlotClicked
         nsView.onSwapSlots = onSwapSlots
+        nsView.onSelectedSlotChanged = { idx in
+            DispatchQueue.main.async {
+                self.selectedSlotIndex = idx
+            }
+        }
+        nsView.setPreviewAnimating(isPreviewAnimating)
+        if let trigger = clearEnlargementTrigger, trigger != context.coordinator.lastClearTrigger {
+            context.coordinator.lastClearTrigger = trigger
+            nsView.clearHoverEnlargement(animated: false)
+        }
         nsView.update(slots: slots)
     }
 }
 
 final class RingPreviewHostView: NSView {
-    private let materialView = RingMaterialView(frame: .zero)
-    private let ringView = RingView(frame: .zero)
-    private let overlayView = RingPreviewOverlayView(frame: .zero)
+    // 渲染图层结构
+    private let ringBackdropLayer = CAShapeLayer()
+    private let backgroundRingLayer = CAGradientLayer()
+    private let ringOutlineLayer = CAShapeLayer()
+    private let ringHighlightClipLayer = CALayer()
+    private let ringHighlightLayer = CAShapeLayer()
+    private let sectorLinesLayer = CAShapeLayer()
+    private let slotsContainerLayer = CALayer()
+    private let centerHubLayer = CALayer()
+    private let centerHubInnerShadowLayer = CAShapeLayer()
 
-    private let editButtonLayer = CALayer()
-    private let deleteButtonLayer = CALayer()
-    private let dragGhostLayer = CALayer()
-    private let targetHighlightLayer = CAShapeLayer()
+    // 拖拽与高亮图层
     private let focusHighlightLayer = CAShapeLayer()
-    private let centerTitleLayer = CATextLayer()
-    private let centerSubtitleLayer = CATextLayer()
+    private let targetHighlightLayer = CAShapeLayer()
+    private let dragGhostLayer = CALayer()
 
     private(set) var slots: [Slot] = []
-    private var cachedSquareFrame: CGRect = .zero
-    private var cachedGeometry: RingGeometry?
+    private(set) var focusedSlotIndex: Int?
+    private(set) var hoveredEnlargedSlotIndex: Int?
+    private(set) var hoveredEnlargedSlotID: UUID?
+    private(set) var hoveredEnlargedApp: AppReference?
+    private(set) var isPreviewAnimating: Bool = false
     private var trackingArea: NSTrackingArea?
 
-    private(set) var hoveredSlotIndex: Int?
-    private(set) var hoveredButton: RingPreviewButtonKind?
-    private(set) var focusedSlotIndex: Int?
-    private var pendingTarget: RingPreviewHitTarget?
+    // 拖拽状态（4pt 阈值与内部槽位身份隔离）
     private var dragCandidateIndex: Int?
     private var mouseDownPoint: NSPoint = .zero
     private(set) var isDragging: Bool = false
+    private var pendingClickSlotIndex: Int?
+    private var lastClickedSlotIndex: Int?
+    private var lastClickTime: TimeInterval = 0
 
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
     var onSwapSlots: ((Int, Int) -> Void)?
-
-    private lazy var editNormalImage: NSImage = {
-        RingPreviewButtonImageFactory.createButtonImage(
-            symbolName: "pencil",
-            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
-            backgroundColor: NSColor(white: 0.18, alpha: 0.95),
-            borderColor: NSColor(white: 1.0, alpha: 0.35),
-            symbolColor: .white
-        )
-    }()
-
-    private lazy var editHoverImage: NSImage = {
-        RingPreviewButtonImageFactory.createButtonImage(
-            symbolName: "pencil",
-            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
-            backgroundColor: NSColor.controlAccentColor,
-            borderColor: NSColor(white: 1.0, alpha: 0.6),
-            symbolColor: .white
-        )
-    }()
-
-    private lazy var deleteNormalImage: NSImage = {
-        RingPreviewButtonImageFactory.createButtonImage(
-            symbolName: "xmark",
-            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
-            backgroundColor: NSColor(white: 0.18, alpha: 0.95),
-            borderColor: NSColor(white: 1.0, alpha: 0.35),
-            symbolColor: .white
-        )
-    }()
-
-    private lazy var deleteHoverImage: NSImage = {
-        RingPreviewButtonImageFactory.createButtonImage(
-            symbolName: "xmark",
-            diameter: RingPreviewLayoutHelper.defaultButtonDiameter,
-            backgroundColor: NSColor.systemRed,
-            borderColor: NSColor(white: 1.0, alpha: 0.6),
-            symbolColor: .white
-        )
-    }()
+    var onSelectedSlotChanged: ((Int?) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        setup()
+        setupLayers()
     }
 
     required init?(coder: NSCoder) {
         super.init(coder: coder)
-        setup()
+        setupLayers()
     }
 
-    override var isFlipped: Bool { false }
-
+    override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { true }
     override var canBecomeKeyView: Bool { true }
 
-    override func becomeFirstResponder() -> Bool {
-        let result = super.becomeFirstResponder()
-        if result {
-            if focusedSlotIndex == nil && !slots.isEmpty {
-                focusedSlotIndex = 0
-            }
-            updateFocusAndCenter()
-            needsDisplay = true
-        }
-        return result
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let result = super.resignFirstResponder()
-        if result {
+    func setFocusedSlotIndex(_ index: Int?) {
+        if let index, slots.indices.contains(index) {
+            focusedSlotIndex = index
+        } else {
             focusedSlotIndex = nil
-            updateFocusAndCenter()
-            needsDisplay = true
         }
-        return result
+        updateFocusAndHub()
     }
 
-    private func setup() {
+    func setPreviewAnimating(_ animating: Bool) {
+        guard isPreviewAnimating != animating else { return }
+        isPreviewAnimating = animating
+        if animating {
+            clearHoverEnlargement(animated: false)
+        }
+    }
+
+    func clearHoverEnlargement(animated: Bool = true) {
+        guard hoveredEnlargedSlotIndex != nil || hoveredEnlargedSlotID != nil || hoveredEnlargedApp != nil else { return }
+        hoveredEnlargedSlotIndex = nil
+        hoveredEnlargedSlotID = nil
+        hoveredEnlargedApp = nil
+        applyEnlargement(animated: animated)
+    }
+
+    private func setHoveredEnlargedSlotIndex(_ index: Int?) {
+        guard !isDragging, !isPreviewAnimating,
+              let index, slots.indices.contains(index), let app = slots[index].app else {
+            clearHoverEnlargement(animated: true)
+            return
+        }
+        if hoveredEnlargedSlotIndex == index && hoveredEnlargedSlotID == slots[index].id && hoveredEnlargedApp == app {
+            return
+        }
+        hoveredEnlargedSlotIndex = index
+        hoveredEnlargedSlotID = slots[index].id
+        hoveredEnlargedApp = app
+        applyEnlargement(animated: true)
+    }
+
+    private func applyEnlargement(animated: Bool = true) {
+        CATransaction.begin()
+        if animated {
+            CATransaction.setAnimationDuration(0.18)
+            CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        } else {
+            CATransaction.setDisableActions(true)
+        }
+
+        let count = max(slots.count, 1)
+        for i in 0..<count {
+            guard let sublayers = slotsContainerLayer.sublayers,
+                  i < sublayers.count else { continue }
+            let slotLayer = sublayers[i]
+            if let enlarged = hoveredEnlargedSlotIndex, enlarged == i {
+                slotLayer.zPosition = 10
+                slotLayer.transform = CATransform3DMakeScale(1.5, 1.5, 1.0)
+            } else {
+                slotLayer.zPosition = 0
+                slotLayer.transform = CATransform3DIdentity
+            }
+        }
+        CATransaction.commit()
+    }
+
+    private func setupLayers() {
         wantsLayer = true
         layer?.masksToBounds = false
-        materialView.autoresizingMask = []
-        ringView.autoresizingMask = []
-        overlayView.autoresizingMask = []
-        overlayView.wantsLayer = true
-        overlayView.layer?.masksToBounds = false
 
-        addSubview(materialView)
-        addSubview(ringView)
-        addSubview(overlayView)
+        let scale = window?.backingScaleFactor ?? 2.0
 
-        setupOverlayLayers()
-    }
+        // 0. 外环底盘层（不透明 #F6F6F8 阻隔阴影透入盘面，外阴影向外扩散）
+        ringBackdropLayer.fillColor = HTMLSpecs.windowBackgroundNS.cgColor
+        ringBackdropLayer.shadowColor = NSColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.12).cgColor
+        ringBackdropLayer.shadowOpacity = 1.0
+        ringBackdropLayer.shadowRadius = 18.0
+        ringBackdropLayer.shadowOffset = CGSize(width: 0, height: -14.0)
+        layer?.addSublayer(ringBackdropLayer)
 
-    private func setupOverlayLayers() {
-        guard let hostLayer = overlayView.layer else { return }
+        // 1. 外环渐变图层（145°，左上 #FFFFFF 85% 到右下 #EBEDF2 72%）
+        backgroundRingLayer.colors = [
+            NSColor(white: 1.0, alpha: 0.85).cgColor,
+            NSColor(red: 235/255, green: 237/255, blue: 242/255, alpha: 0.72).cgColor
+        ]
+        let angle = 145.0 * CGFloat.pi / 180.0
+        let direction = CGPoint(x: sin(angle), y: -cos(angle))
+        let extent = (abs(direction.x) + abs(direction.y)) / 2
+        backgroundRingLayer.startPoint = CGPoint(x: 0.5 - direction.x * extent, y: 0.5 - direction.y * extent)
+        backgroundRingLayer.endPoint = CGPoint(x: 0.5 + direction.x * extent, y: 0.5 + direction.y * extent)
+        backgroundRingLayer.cornerRadius = HTMLSpecs.ringDiameter / 2
+        layer?.addSublayer(backgroundRingLayer)
 
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
+        ringOutlineLayer.fillColor = NSColor(white: 0, alpha: 0.06).cgColor
+        ringOutlineLayer.fillRule = .evenOdd
+        layer?.addSublayer(ringOutlineLayer)
 
-        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2.0
+        // CSS inset 0 1px 1px: cast from outside the circle and clip to the plate.
+        ringHighlightClipLayer.cornerRadius = HTMLSpecs.ringDiameter / 2
+        ringHighlightClipLayer.masksToBounds = true
+        ringHighlightLayer.fillColor = NSColor.white.cgColor
+        ringHighlightLayer.fillRule = .evenOdd
+        ringHighlightLayer.shadowColor = NSColor.white.cgColor
+        ringHighlightLayer.shadowOpacity = 0.9
+        ringHighlightLayer.shadowRadius = 0.5
+        ringHighlightLayer.shadowOffset = CGSize(width: 0, height: -1)
+        ringHighlightClipLayer.addSublayer(ringHighlightLayer)
+        layer?.addSublayer(ringHighlightClipLayer)
 
-        targetHighlightLayer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.25).cgColor
-        targetHighlightLayer.strokeColor = NSColor.controlAccentColor.cgColor
-        targetHighlightLayer.lineWidth = 2.0
-        targetHighlightLayer.isHidden = true
-        hostLayer.addSublayer(targetHighlightLayer)
+        // 2. 放射状扇区分割线图层
+        sectorLinesLayer.strokeColor = NSColor(white: 0.0, alpha: 0.06).cgColor
+        sectorLinesLayer.lineWidth = 1.0
+        layer?.addSublayer(sectorLinesLayer)
 
-        focusHighlightLayer.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
-        focusHighlightLayer.strokeColor = NSColor.keyboardFocusIndicatorColor.cgColor
-        focusHighlightLayer.lineWidth = 3.0
-        focusHighlightLayer.lineCap = .round
-        focusHighlightLayer.lineJoin = .round
-        focusHighlightLayer.shadowColor = NSColor.keyboardFocusIndicatorColor.cgColor
-        focusHighlightLayer.shadowOpacity = 0.5
-        focusHighlightLayer.shadowRadius = 4.0
-        focusHighlightLayer.shadowOffset = .zero
+        // 3. 中心圆孔 Hub 材质层（置于槽位层之下，确保 1.5× 放大图标不被中心盘边缘遮挡；上层交互由 SwiftUI centerHub 托管）
+        centerHubLayer.backgroundColor = HTMLSpecs.windowBackgroundNS.cgColor
+        centerHubLayer.cornerRadius = HTMLSpecs.holeDiameter / 2
+        centerHubLayer.borderColor = NSColor(white: 0.0, alpha: 0.05).cgColor
+        centerHubLayer.borderWidth = 1.0
+        centerHubLayer.masksToBounds = true
+        layer?.addSublayer(centerHubLayer)
+
+        // 内阴影
+        centerHubInnerShadowLayer.fillColor = NSColor.black.cgColor
+        centerHubInnerShadowLayer.fillRule = .evenOdd
+        centerHubInnerShadowLayer.shadowColor = NSColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 1).cgColor
+        centerHubInnerShadowLayer.shadowOpacity = 0.07
+        centerHubInnerShadowLayer.shadowRadius = 4
+        centerHubInnerShadowLayer.shadowOffset = CGSize(width: 0, height: 2)
+        centerHubLayer.addSublayer(centerHubInnerShadowLayer)
+
+        // 4. 槽位图标容器层（保持外部阴影与 1.5× 放大图标不被裁剪或遮挡）
+        slotsContainerLayer.masksToBounds = false
+        layer?.addSublayer(slotsContainerLayer)
+
+        // 5. 选中态发光轮廓层
+        focusHighlightLayer.fillColor = nil
+        focusHighlightLayer.strokeColor = HTMLSpecs.accentBlueNS.cgColor
+        focusHighlightLayer.lineWidth = 2.5
+        focusHighlightLayer.shadowColor = HTMLSpecs.accentBlueNS.withAlphaComponent(0.38).cgColor
+        focusHighlightLayer.shadowOpacity = 1.0
+        focusHighlightLayer.shadowRadius = 8.0
+        focusHighlightLayer.shadowOffset = CGSize(width: 0, height: -4.0)
         focusHighlightLayer.isHidden = true
-        hostLayer.addSublayer(focusHighlightLayer)
+        layer?.addSublayer(focusHighlightLayer)
 
-        editButtonLayer.contentsScale = scale
-        editButtonLayer.shadowColor = NSColor.black.cgColor
-        editButtonLayer.shadowOpacity = 0.35
-        editButtonLayer.shadowOffset = CGSize(width: 0, height: -1)
-        editButtonLayer.shadowRadius = 2.0
-        editButtonLayer.isHidden = true
-        hostLayer.addSublayer(editButtonLayer)
+        // 6. 目标高亮层（拖拽悬浮）
+        targetHighlightLayer.fillColor = nil
+        targetHighlightLayer.strokeColor = NSColor(red: 52/255, green: 199/255, blue: 89/255, alpha: 1.0).cgColor
+        targetHighlightLayer.lineWidth = 2.5
+        targetHighlightLayer.shadowColor = NSColor(red: 52/255, green: 199/255, blue: 89/255, alpha: 0.35).cgColor
+        targetHighlightLayer.shadowOpacity = 1.0
+        targetHighlightLayer.shadowRadius = 8.0
+        targetHighlightLayer.shadowOffset = CGSize(width: 0, height: -4.0)
+        targetHighlightLayer.isHidden = true
+        layer?.addSublayer(targetHighlightLayer)
 
-        deleteButtonLayer.contentsScale = scale
-        deleteButtonLayer.shadowColor = NSColor.black.cgColor
-        deleteButtonLayer.shadowOpacity = 0.35
-        deleteButtonLayer.shadowOffset = CGSize(width: 0, height: -1)
-        deleteButtonLayer.shadowRadius = 2.0
-        deleteButtonLayer.isHidden = true
-        hostLayer.addSublayer(deleteButtonLayer)
-
+        // 拖拽影子
         dragGhostLayer.contentsScale = scale
         dragGhostLayer.opacity = 0.85
         dragGhostLayer.shadowColor = NSColor.black.cgColor
-        dragGhostLayer.shadowOpacity = 0.5
-        dragGhostLayer.shadowOffset = CGSize(width: 0, height: -3)
-        dragGhostLayer.shadowRadius = 6.0
+        dragGhostLayer.shadowOpacity = 0.3
+        dragGhostLayer.shadowRadius = 8.0
+        dragGhostLayer.shadowOffset = CGSize(width: 0, height: -4)
         dragGhostLayer.isHidden = true
-        hostLayer.addSublayer(dragGhostLayer)
+        layer?.addSublayer(dragGhostLayer)
+    }
 
-        centerTitleLayer.contentsScale = scale
-        centerTitleLayer.alignmentMode = .center
-        centerTitleLayer.fontSize = 13.5
-        centerTitleLayer.font = NSFont.systemFont(ofSize: 13.5, weight: .semibold)
-        centerTitleLayer.foregroundColor = NSColor.labelColor.cgColor
-        centerTitleLayer.truncationMode = .end
-        centerTitleLayer.isHidden = true
-        hostLayer.addSublayer(centerTitleLayer)
-
-        centerSubtitleLayer.contentsScale = scale
-        centerSubtitleLayer.alignmentMode = .center
-        centerSubtitleLayer.fontSize = 11.0
-        centerSubtitleLayer.font = NSFont.systemFont(ofSize: 11.0, weight: .regular)
-        centerSubtitleLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
-        centerSubtitleLayer.truncationMode = .end
-        centerSubtitleLayer.isHidden = true
-        hostLayer.addSublayer(centerSubtitleLayer)
-
-        CATransaction.commit()
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil {
+            clearHoverEnlargement(animated: false)
+        }
+        super.viewWillMove(toWindow: newWindow)
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let oldArea = trackingArea {
-            removeTrackingArea(oldArea)
-        }
+        if let old = trackingArea { removeTrackingArea(old) }
         let area = NSTrackingArea(rect: bounds,
                                   options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect],
                                   owner: self,
@@ -471,298 +1040,411 @@ final class RingPreviewHostView: NSView {
         trackingArea = area
     }
 
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        let localPoint = superview != nil ? convert(point, from: superview) : point
-        if isDragging {
-            return self
+    func update(slots: [Slot]) {
+        // 检查当前悬停放大的 slot 是否依然有效（未被删除、未位移、app 未改变）
+        if let id = hoveredEnlargedSlotID, let idx = hoveredEnlargedSlotIndex, let app = hoveredEnlargedApp {
+            if slots.indices.contains(idx) && slots[idx].id == id && slots[idx].app == app {
+                // 保持当前悬停放大
+            } else {
+                // 槽位被移除、位移或更换了应用，立即清理放大，绝不让另一应用继承
+                hoveredEnlargedSlotIndex = nil
+                hoveredEnlargedSlotID = nil
+                hoveredEnlargedApp = nil
+            }
         }
-        if cachedSquareFrame.contains(localPoint) {
-            return self
+        self.slots = slots
+        if let focused = focusedSlotIndex, !slots.indices.contains(focused) {
+            focusedSlotIndex = nil
+        }
+        needsLayout = true
+    }
+
+    override func layout() {
+        super.layout()
+        let side = HTMLSpecs.ringDiameter
+        let ringOrigin = CGPoint(x: (bounds.width - side) / 2, y: (bounds.height - side) / 2)
+        let ringRect = CGRect(origin: ringOrigin, size: CGSize(width: side, height: side))
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        // 0. 底盘与外阴影（底盘不透明覆盖内部阴影，阴影向外扩散）
+        ringBackdropLayer.frame = ringRect
+        let ringPath = CGPath(ellipseIn: ringBackdropLayer.bounds, transform: nil)
+        ringBackdropLayer.path = ringPath
+        ringBackdropLayer.shadowPath = CGPath(ellipseIn: ringBackdropLayer.bounds.insetBy(dx: 8, dy: 8), transform: nil)
+
+        // 1. 渐变外环（无自身阴影透底）
+        backgroundRingLayer.frame = ringRect
+
+        let plateBounds = ringBackdropLayer.bounds
+        ringOutlineLayer.frame = ringRect
+        let outline = CGMutablePath()
+        outline.addEllipse(in: plateBounds.insetBy(dx: -1, dy: -1))
+        outline.addPath(ringPath)
+        ringOutlineLayer.path = outline
+
+        ringHighlightClipLayer.frame = ringRect
+        ringHighlightLayer.frame = plateBounds
+        let highlight = CGMutablePath()
+        highlight.addRect(plateBounds.insetBy(dx: -4, dy: -4))
+        highlight.addPath(ringPath)
+        ringHighlightLayer.path = highlight
+
+        // 扇区分割线
+        let count = max(slots.count, 1)
+        let cx = ringOrigin.x + side / 2
+        let cy = ringOrigin.y + side / 2
+        let path = CGMutablePath()
+        for i in 0..<count {
+            let angleDeg = (360.0 / Double(count)) * (Double(i) + 0.5) - 90.0
+            let rad = angleDeg * .pi / 180.0
+            let x1 = cx + HTMLSpecs.sectorInnerRadius * CGFloat(cos(rad))
+            let y1 = cy + HTMLSpecs.sectorInnerRadius * CGFloat(sin(rad))
+            let x2 = cx + HTMLSpecs.sectorOuterRadius * CGFloat(cos(rad))
+            let y2 = cy + HTMLSpecs.sectorOuterRadius * CGFloat(sin(rad))
+            path.move(to: CGPoint(x: x1, y: y1))
+            path.addLine(to: CGPoint(x: x2, y: y2))
+        }
+        sectorLinesLayer.path = path
+
+        // 中心 Hub 几何与内阴影闭合路径
+        let hubSide = HTMLSpecs.holeDiameter
+        let hubRect = CGRect(x: cx - hubSide / 2, y: cy - hubSide / 2, width: hubSide, height: hubSide)
+        centerHubLayer.frame = hubRect
+        let hubBounds = CGRect(origin: .zero, size: CGSize(width: hubSide, height: hubSide))
+        let innerShadowPath = CGMutablePath()
+        innerShadowPath.addRect(hubBounds.insetBy(dx: -12, dy: -12))
+        innerShadowPath.addEllipse(in: hubBounds)
+        centerHubInnerShadowLayer.path = innerShadowPath
+        centerHubInnerShadowLayer.frame = hubBounds
+
+        layoutSlotLayers(cx: cx, cy: cy, count: count)
+        updateFocusAndHub()
+
+        CATransaction.commit()
+    }
+
+    private func layoutSlotLayers(cx: CGFloat, cy: CGFloat, count: Int) {
+        slotsContainerLayer.sublayers?.forEach { $0.removeFromSuperlayer() }
+        let radius = HTMLSpecs.ringDiameter * HTMLSpecs.slotRadiusPercent
+        let iconSize: CGFloat = count >= 7 ? 44.0 : 52.0
+        let cornerRadius: CGFloat = count >= 7 ? 12.0 : 13.0
+        let scale = window?.backingScaleFactor ?? 2.0
+
+        for i in 0..<count {
+            let angleDeg = (360.0 / Double(count)) * Double(i) - 90.0
+            let rad = angleDeg * .pi / 180.0
+            let posX = cx + radius * CGFloat(cos(rad))
+            let posY = cy + radius * CGFloat(sin(rad))
+
+            let slotLayer = CALayer()
+            slotLayer.bounds = CGRect(x: 0, y: 0, width: iconSize, height: iconSize)
+            slotLayer.position = CGPoint(x: posX, y: posY)
+            slotLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+            slotLayer.cornerRadius = cornerRadius
+            slotLayer.masksToBounds = false // 保留外部阴影不被裁剪
+            slotLayer.name = "slot_\(i)"
+
+            if i < slots.count, let app = slots[i].app {
+                // 仅设置页环形槽位移除有应用图标背后的外加白方底和选中蓝描边
+                slotLayer.backgroundColor = nil
+                slotLayer.shadowOpacity = 0.0
+
+                let iconLayer = CALayer()
+                iconLayer.frame = CGRect(x: 3, y: 3, width: iconSize - 6, height: iconSize - 6)
+                iconLayer.cornerRadius = 10.0
+                iconLayer.masksToBounds = true
+                iconLayer.contentsScale = scale
+                if FileManager.default.fileExists(atPath: app.path) {
+                    iconLayer.contents = NSWorkspace.shared.icon(forFile: app.path)
+                } else if let bid = app.bundleIdentifier,
+                          let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
+                    iconLayer.contents = NSWorkspace.shared.icon(forFile: url.path)
+                } else {
+                    iconLayer.contents = Self.makeIdentifiableIcon(name: app.displayName, size: CGSize(width: iconSize - 6, height: iconSize - 6))
+                }
+                slotLayer.addSublayer(iconLayer)
+            } else {
+                slotLayer.backgroundColor = NSColor(white: 1.0, alpha: 0.40).cgColor
+                let dashLayer = CAShapeLayer()
+                dashLayer.frame = CGRect(origin: .zero, size: CGSize(width: iconSize, height: iconSize))
+                dashLayer.path = CGPath(roundedRect: CGRect(origin: .zero, size: CGSize(width: iconSize, height: iconSize)),
+                                        cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+                dashLayer.fillColor = nil
+                dashLayer.strokeColor = NSColor(white: 0.0, alpha: 0.20).cgColor
+                dashLayer.lineWidth = 1.5
+                dashLayer.lineDashPattern = [4, 3]
+                slotLayer.addSublayer(dashLayer)
+            }
+            slotsContainerLayer.addSublayer(slotLayer)
+        }
+        applyEnlargement(animated: false)
+    }
+
+    /// 为未在本地安装的应用生成高清晰度 Squircle 占位图标，杜绝空贴图
+    static func makeIdentifiableIcon(name: String, size: CGSize) -> NSImage {
+        let img = NSImage(size: size)
+        img.lockFocus()
+        let rect = NSRect(origin: .zero, size: size)
+        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
+        let hueIndex = name.utf8.reduce(0) { ($0 * 31 + Int($1)) % 100 }
+        let hue = CGFloat(hueIndex) / 100.0
+        let bg = NSColor(hue: hue, saturation: 0.60, brightness: 0.85, alpha: 1.0)
+        bg.setFill()
+        path.fill()
+
+        let initial = String(name.prefix(1))
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.systemFont(ofSize: size.height * 0.46, weight: .semibold),
+            .foregroundColor: NSColor.white
+        ]
+        let str = NSAttributedString(string: initial, attributes: attrs)
+        let strSize = str.size()
+        let strRect = NSRect(x: (size.width - strSize.width) / 2,
+                             y: (size.height - strSize.height) / 2,
+                             width: strSize.width,
+                             height: strSize.height)
+        str.draw(in: strRect)
+        img.unlockFocus()
+        return img
+    }
+
+    func pointForSlot(at index: Int) -> NSPoint {
+        let count = max(slots.count, 1)
+        let side = HTMLSpecs.ringDiameter
+        let cx = (bounds.width - side) / 2 + side / 2
+        let cy = (bounds.height - side) / 2 + side / 2
+        let radius = HTMLSpecs.ringDiameter * HTMLSpecs.slotRadiusPercent
+        let angleDeg = (360.0 / Double(count)) * Double(index) - 90.0
+        let rad = angleDeg * .pi / 180.0
+        return NSPoint(x: cx + radius * CGFloat(cos(rad)), y: cy + radius * CGFloat(sin(rad)))
+    }
+
+    var centerHubInnerShadowLayerForTesting: CAShapeLayer {
+        centerHubInnerShadowLayer
+    }
+
+    var slotLayerMasksToBoundsForTesting: Bool {
+        slotsContainerLayer.sublayers?.first?.masksToBounds ?? false
+    }
+
+    private func slotIndex(at localPoint: NSPoint) -> Int? {
+        let count = max(slots.count, 1)
+        let hitSize: CGFloat = count >= 7 ? 44.0 : 52.0
+
+        for i in 0..<count {
+            let pt = pointForSlot(at: i)
+            let rect = CGRect(x: pt.x - hitSize / 2, y: pt.y - hitSize / 2, width: hitSize, height: hitSize)
+            if rect.contains(localPoint) {
+                return i
+            }
         }
         return nil
     }
 
-    func cancelDrag() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        isDragging = false
-        dragCandidateIndex = nil
-        pendingTarget = nil
-        dragGhostLayer.isHidden = true
-        targetHighlightLayer.isHidden = true
-        CATransaction.commit()
-        window?.invalidateCursorRects(for: self)
-        updateOverlay()
-        updateFocusAndCenter()
+    private func updateFocusAndHub() {
+        guard let idx = focusedSlotIndex, slots.indices.contains(idx) else {
+            focusHighlightLayer.isHidden = true
+            return
+        }
+
+        // 仅设置页环形槽位移除有应用图标背后的外加白方底和选中蓝描边
+        if slots[idx].app != nil {
+            focusHighlightLayer.isHidden = true
+            return
+        }
+
+        let count = max(slots.count, 1)
+        let side = HTMLSpecs.ringDiameter
+        let cx = (bounds.width - side) / 2 + side / 2
+        let cy = (bounds.height - side) / 2 + side / 2
+        let radius = HTMLSpecs.ringDiameter * HTMLSpecs.slotRadiusPercent
+        let iconSize: CGFloat = count >= 7 ? 44.0 : 52.0
+        let cornerRadius: CGFloat = count >= 7 ? 12.0 : 13.0
+
+        let angleDeg = (360.0 / Double(count)) * Double(idx) - 90.0
+        let rad = angleDeg * .pi / 180.0
+        let posX = cx + radius * CGFloat(cos(rad))
+        let posY = cy + radius * CGFloat(sin(rad))
+        let rect = CGRect(x: posX - iconSize / 2, y: posY - iconSize / 2, width: iconSize, height: iconSize)
+
+        focusHighlightLayer.frame = bounds
+        focusHighlightLayer.path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        focusHighlightLayer.isHidden = false
     }
 
+    // MARK: - 键盘导航全覆盖 (方向键/Tab/回车/Delete/Esc，支持 Tab 离环)
+
     override func keyDown(with event: NSEvent) {
-        // Esc: 53
-        if event.keyCode == 53 {
+        let count = slots.count
+        guard count > 0 else {
+            super.keyDown(with: event)
+            return
+        }
+
+        switch event.keyCode {
+        case 53: // Esc：清除焦点及点击选中详情回到空白
             if isDragging {
                 cancelDrag()
-                return
-            }
-            if focusedSlotIndex != nil {
-                focusedSlotIndex = nil
-                updateFocusAndCenter()
-                window?.makeFirstResponder(nil)
-                return
-            }
-        }
-
-        // Tab: 48
-        if event.keyCode == 48 {
-            let count = slots.count
-            guard count > 0 else {
-                super.keyDown(with: event)
-                return
-            }
-            let isShift = event.modifierFlags.contains(.shift)
-            if isShift {
-                if let cur = focusedSlotIndex, cur > 0 {
-                    focusedSlotIndex = cur - 1
-                    updateFocusAndCenter()
-                } else {
-                    focusedSlotIndex = nil
-                    updateFocusAndCenter()
-                    window?.selectPreviousKeyView(self)
-                }
             } else {
-                if let cur = focusedSlotIndex, cur + 1 < count {
-                    focusedSlotIndex = cur + 1
-                    updateFocusAndCenter()
-                } else {
-                    focusedSlotIndex = nil
-                    updateFocusAndCenter()
-                    window?.selectNextKeyView(self)
-                }
+                focusedSlotIndex = nil
+                onSelectedSlotChanged?(nil)
+                updateFocusAndHub()
             }
-            return
-        }
-
-        // Arrow keys: Left (123), Right (124), Down (125), Up (126)
-        if event.keyCode == 123 || event.keyCode == 126 { // Left or Up
-            let count = slots.count
-            guard count > 0 else { return }
+        case 48: // Tab（仅移动键盘焦点，不触碰点击选中详情）
+            let shift = event.modifierFlags.contains(.shift)
             let cur = focusedSlotIndex ?? 0
-            focusedSlotIndex = (cur - 1 + count) % count
-            updateFocusAndCenter()
-            return
-        }
-        if event.keyCode == 124 || event.keyCode == 125 { // Right or Down
-            let count = slots.count
-            guard count > 0 else { return }
+            if shift {
+                if cur == 0 {
+                    window?.selectPreviousKeyView(self)
+                    return
+                }
+                let prev = cur - 1
+                focusedSlotIndex = prev
+                updateFocusAndHub()
+            } else {
+                if focusedSlotIndex == nil {
+                    focusedSlotIndex = 0
+                    updateFocusAndHub()
+                    return
+                }
+                if cur >= count - 1 {
+                    window?.selectNextKeyView(self)
+                    return
+                }
+                let next = cur + 1
+                focusedSlotIndex = next
+                updateFocusAndHub()
+            }
+        case 123, 126: // Left / Up (圆环内循环，仅移动焦点)
             let cur = focusedSlotIndex ?? 0
-            focusedSlotIndex = (cur + 1) % count
-            updateFocusAndCenter()
-            return
-        }
-
-        // Enter / Return (36, 76) or Space (49)
-        if event.keyCode == 36 || event.keyCode == 76 || event.keyCode == 49 {
+            let prev = (cur - 1 + count) % count
+            focusedSlotIndex = prev
+            updateFocusAndHub()
+        case 124, 125: // Right / Down (圆环内循环，仅移动焦点)
+            let cur = focusedSlotIndex
+            let next = cur.map { ($0 + 1) % count } ?? 0
+            focusedSlotIndex = next
+            updateFocusAndHub()
+        case 36, 76, 49: // Return / Enter / Space
             if let idx = focusedSlotIndex, slots.indices.contains(idx) {
                 if slots[idx].app != nil {
                     onEditSlotClicked?(idx, slots[idx].id)
                 } else {
                     onEmptySlotClicked?(idx, slots[idx].id)
                 }
-                return
             }
-        }
-
-        // Delete / Backspace (51, 117)
-        if event.keyCode == 51 || event.keyCode == 117 {
+        case 51, 117: // Backspace / Delete
             if let idx = focusedSlotIndex, slots.indices.contains(idx), slots[idx].app != nil {
                 onDeleteSlotClicked?(idx, slots[idx].id)
-                return
+            }
+        default:
+            super.keyDown(with: event)
+        }
+    }
+
+    // MARK: - 悬停 1.5× 放大与未放大图标命中
+
+    private func iconHitRect(for index: Int) -> CGRect {
+        let pt = pointForSlot(at: index)
+        let iconInnerSize = (slots.count >= 7 ? 44.0 : 52.0) - 6.0
+        return CGRect(x: pt.x - iconInnerSize / 2, y: pt.y - iconInnerSize / 2, width: iconInnerSize, height: iconInnerSize)
+    }
+
+    private func hoveredFilledIconIndex(at localPoint: NSPoint) -> Int? {
+        guard !isDragging, !isPreviewAnimating, bounds.contains(localPoint) else { return nil }
+        for i in 0..<slots.count where slots[i].app != nil {
+            if iconHitRect(for: i).contains(localPoint) {
+                return i
             }
         }
+        return nil
+    }
 
-        super.keyDown(with: event)
+    private func updateHoverEnlargement(at localPoint: NSPoint) {
+        if let target = hoveredFilledIconIndex(at: localPoint) {
+            setHoveredEnlargedSlotIndex(target)
+        } else {
+            clearHoverEnlargement(animated: true)
+        }
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        let localPoint = convert(event.locationInWindow, from: nil)
+        updateHoverEnlargement(at: localPoint)
     }
 
     override func mouseMoved(with event: NSEvent) {
-        super.mouseMoved(with: event)
         let localPoint = convert(event.locationInWindow, from: nil)
-        updateHoverState(at: localPoint)
+        updateHoverEnlargement(at: localPoint)
     }
 
     override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        guard !isDragging else { return }
-        hoveredSlotIndex = nil
-        hoveredButton = nil
-        updateOverlay()
-        updateFocusAndCenter()
+        clearHoverEnlargement(animated: true)
     }
 
-    private func updateHoverState(at localPoint: NSPoint) {
-        guard !isDragging, cachedSquareFrame.width > 0, let geometry = cachedGeometry else { return }
-        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
-                                    y: localPoint.y - cachedSquareFrame.origin.y)
-        let target = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
-                                                     in: geometry,
-                                                     slots: slots,
-                                                     activeHoverSlot: hoveredSlotIndex)
-        switch target {
-        case .occupiedSlot(let index, let buttonKind):
-            hoveredSlotIndex = index
-            hoveredButton = buttonKind
-        case .emptySlot(let index):
-            hoveredSlotIndex = index
-            hoveredButton = nil
-        case .none:
-            hoveredSlotIndex = nil
-            hoveredButton = nil
-        }
-        updateOverlay()
-        updateFocusAndCenter()
-    }
-
-    private func updateOverlay() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        guard !isDragging,
-              let hovered = hoveredSlotIndex,
-              let geometry = cachedGeometry,
-              slots.indices.contains(hovered),
-              slots[hovered].app != nil else {
-            editButtonLayer.isHidden = true
-            deleteButtonLayer.isHidden = true
-            CATransaction.commit()
-            return
-        }
-
-        let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: hovered, in: geometry)
-        editButtonLayer.frame = slotGeom.editButtonFrame
-        deleteButtonLayer.frame = slotGeom.deleteButtonFrame
-
-        editButtonLayer.contents = (hoveredButton == .edit) ? editHoverImage : editNormalImage
-        deleteButtonLayer.contents = (hoveredButton == .delete) ? deleteHoverImage : deleteNormalImage
-
-        editButtonLayer.isHidden = false
-        deleteButtonLayer.isHidden = false
-
-        CATransaction.commit()
-    }
-
-    func updateFocusAndCenter() {
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-
-        // Focus indicator layer
-        if let focused = focusedSlotIndex,
-           let geometry = cachedGeometry,
-           slots.indices.contains(focused),
-           window == nil || window?.firstResponder === self {
-            let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: focused, in: geometry)
-            let focusRect = slotGeom.iconFrame.insetBy(dx: -5, dy: -5)
-            focusHighlightLayer.path = CGPath(roundedRect: focusRect, cornerWidth: 10, cornerHeight: 10, transform: nil)
-            focusHighlightLayer.isHidden = false
-        } else {
-            focusHighlightLayer.isHidden = true
-        }
-
-        // Center readable text for hover or keyboard focus
-        let activeIndex = isDragging ? nil : (hoveredSlotIndex ?? focusedSlotIndex)
-        if let active = activeIndex, slots.indices.contains(active) {
-            let slot = slots[active]
-            let slotNumber = active + 1
-            if let app = slot.app {
-                centerTitleLayer.string = app.displayName
-                centerSubtitleLayer.string = "第 \(slotNumber) 位 · 回车更换 · Delete 移除"
-            } else {
-                centerTitleLayer.string = "空位"
-                centerSubtitleLayer.string = "第 \(slotNumber) 位 · 回车添加"
-            }
-            centerTitleLayer.isHidden = false
-            centerSubtitleLayer.isHidden = false
-        } else {
-            centerTitleLayer.string = ""
-            centerSubtitleLayer.string = ""
-            centerTitleLayer.isHidden = true
-            centerSubtitleLayer.isHidden = true
-        }
-
-        CATransaction.commit()
-    }
+    // MARK: - 鼠标点击与安全拖拽
 
     override func mouseDown(with event: NSEvent) {
-        if window != nil && window?.firstResponder !== self {
-            window?.makeFirstResponder(self)
-        }
+        window?.makeFirstResponder(self)
         let localPoint = convert(event.locationInWindow, from: nil)
-        guard cachedSquareFrame.width > 0, let geometry = cachedGeometry else {
-            super.mouseDown(with: event)
-            return
-        }
-        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
-                                    y: localPoint.y - cachedSquareFrame.origin.y)
-        let target = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
-                                                     in: geometry,
-                                                     slots: slots,
-                                                     activeHoverSlot: hoveredSlotIndex)
-        switch target {
-        case .emptySlot(let index):
-            pendingTarget = target
+        mouseDownPoint = localPoint
+        isDragging = false
+
+        if let clicked = slotIndex(at: localPoint) {
+            focusedSlotIndex = clicked
+            updateFocusAndHub()
+            dragCandidateIndex = clicked
+            pendingClickSlotIndex = clicked
+
+            let now = ProcessInfo.processInfo.systemUptime
+            // 严格同一槽位双击校验，彻底避免跨槽快速点击误触发双击
+            if event.clickCount == 2 && lastClickedSlotIndex == clicked {
+                if slots[clicked].app != nil {
+                    onEditSlotClicked?(clicked, slots[clicked].id)
+                } else {
+                    onSelectedSlotChanged?(nil)
+                    onEmptySlotClicked?(clicked, slots[clicked].id)
+                }
+                lastClickedSlotIndex = nil
+                lastClickTime = 0
+                return
+            }
+            lastClickedSlotIndex = clicked
+            lastClickTime = now
+        } else {
             dragCandidateIndex = nil
-            focusedSlotIndex = index
-            updateFocusAndCenter()
-        case .occupiedSlot(let index, button: .some):
-            pendingTarget = target
-            dragCandidateIndex = nil
-            focusedSlotIndex = index
-            updateFocusAndCenter()
-        case .occupiedSlot(let index, button: .none):
-            pendingTarget = target
-            dragCandidateIndex = index
-            mouseDownPoint = localPoint
-            isDragging = false
-            focusedSlotIndex = index
-            updateFocusAndCenter()
-        case .none:
-            pendingTarget = nil
-            dragCandidateIndex = nil
-            super.mouseDown(with: event)
+            pendingClickSlotIndex = nil
+            lastClickedSlotIndex = nil
+            focusedSlotIndex = nil
+            updateFocusAndHub()
+            onSelectedSlotChanged?(nil)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard let sourceIndex = dragCandidateIndex,
-              slots.indices.contains(sourceIndex),
-              let sourceApp = slots[sourceIndex].app,
-              let geometry = cachedGeometry,
-              cachedSquareFrame.width > 0 else {
-            super.mouseDragged(with: event)
-            return
-        }
-
+        // 空槽直接守卫，不激活拖拽状态
+        guard let source = dragCandidateIndex,
+              slots.indices.contains(source),
+              slots[source].app != nil else { return }
         let localPoint = convert(event.locationInWindow, from: nil)
-        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
-                                    y: localPoint.y - cachedSquareFrame.origin.y)
 
         if !isDragging {
             let dist = hypot(localPoint.x - mouseDownPoint.x, localPoint.y - mouseDownPoint.y)
-            if dist > 4 {
+            if dist > 4.0 { // 严格 4pt 拖拽阈值
                 isDragging = true
-                CATransaction.begin()
-                CATransaction.setDisableActions(true)
-                editButtonLayer.isHidden = true
-                deleteButtonLayer.isHidden = true
+                clearHoverEnlargement(animated: false)
                 focusHighlightLayer.isHidden = true
-                centerTitleLayer.isHidden = true
-                centerSubtitleLayer.isHidden = true
-
-                let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: sourceIndex, in: geometry)
-                let icon = NSWorkspace.shared.icon(forFile: sourceApp.path)
-                dragGhostLayer.contents = icon
-                dragGhostLayer.bounds = CGRect(origin: .zero, size: slotGeom.iconFrame.size)
-                dragGhostLayer.position = pointInSquare
+                if let app = slots[source].app {
+                    if FileManager.default.fileExists(atPath: app.path) {
+                        dragGhostLayer.contents = NSWorkspace.shared.icon(forFile: app.path)
+                    } else {
+                        dragGhostLayer.contents = Self.makeIdentifiableIcon(name: app.displayName, size: CGSize(width: 52, height: 52))
+                    }
+                }
+                dragGhostLayer.frame = CGRect(x: localPoint.x - 26, y: localPoint.y - 26, width: 52, height: 52)
                 dragGhostLayer.isHidden = false
-                CATransaction.commit()
-
                 NSCursor.closedHand.set()
             }
         }
@@ -770,16 +1452,24 @@ final class RingPreviewHostView: NSView {
         if isDragging {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
-            dragGhostLayer.position = pointInSquare
+            dragGhostLayer.position = localPoint
+            if let target = slotIndex(at: localPoint), target != source {
+                let count = max(slots.count, 1)
+                let side = HTMLSpecs.ringDiameter
+                let cx = (bounds.width - side) / 2 + side / 2
+                let cy = (bounds.height - side) / 2 + side / 2
+                let radius = HTMLSpecs.ringDiameter * HTMLSpecs.slotRadiusPercent
+                let iconSize: CGFloat = count >= 7 ? 44.0 : 52.0
+                let cornerRadius: CGFloat = count >= 7 ? 12.0 : 13.0
 
-            let dropTarget = RingPreviewLayoutHelper.dragDropTarget(at: pointInSquare,
-                                                                    in: geometry,
-                                                                    slots: slots,
-                                                                    sourceIndex: sourceIndex)
-            if let target = dropTarget {
-                let targetGeom = RingPreviewLayoutHelper.slotGeometry(for: target, in: geometry)
-                let rect = targetGeom.iconFrame.insetBy(dx: -4, dy: -4)
-                targetHighlightLayer.path = CGPath(roundedRect: rect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+                let angleDeg = (360.0 / Double(count)) * Double(target) - 90.0
+                let rad = angleDeg * .pi / 180.0
+                let posX = cx + radius * CGFloat(cos(rad))
+                let posY = cy + radius * CGFloat(sin(rad))
+                let rect = CGRect(x: posX - iconSize / 2, y: posY - iconSize / 2, width: iconSize, height: iconSize)
+
+                targetHighlightLayer.frame = bounds
+                targetHighlightLayer.path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
                 targetHighlightLayer.isHidden = false
             } else {
                 targetHighlightLayer.isHidden = true
@@ -790,195 +1480,52 @@ final class RingPreviewHostView: NSView {
 
     override func mouseUp(with event: NSEvent) {
         let localPoint = convert(event.locationInWindow, from: nil)
-        guard cachedSquareFrame.width > 0, let geometry = cachedGeometry else {
-            super.mouseUp(with: event)
-            return
-        }
-        let pointInSquare = CGPoint(x: localPoint.x - cachedSquareFrame.origin.x,
-                                    y: localPoint.y - cachedSquareFrame.origin.y)
-
         if isDragging {
             let source = dragCandidateIndex
-            let dropTarget = source != nil ? RingPreviewLayoutHelper.dragDropTarget(at: pointInSquare,
-                                                                                    in: geometry,
-                                                                                    slots: slots,
-                                                                                    sourceIndex: source!) : nil
-
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            isDragging = false
-            dragGhostLayer.isHidden = true
-            targetHighlightLayer.isHidden = true
-            CATransaction.commit()
-
-            dragCandidateIndex = nil
-            pendingTarget = nil
-
-            if let source = source, let target = dropTarget {
-                onSwapSlots?(source, target)
+            let target = slotIndex(at: localPoint)
+            cancelDrag()
+            if let s = source, let t = target, s != t {
+                clearHoverEnlargement(animated: false)
+                onSwapSlots?(s, t)
+                focusedSlotIndex = t
+                updateFocusAndHub()
             }
-
-            updateHoverState(at: localPoint)
-            updateFocusAndCenter()
-            window?.invalidateCursorRects(for: self)
             return
         }
 
+        // 仅主动点击已填槽图标才选中并在中央显示详情（不维持放大）；空槽点击清空选中并直启选择器
+        if let clicked = pendingClickSlotIndex, clicked == slotIndex(at: localPoint) {
+            if slots[clicked].app != nil {
+                if iconHitRect(for: clicked).contains(localPoint) {
+                    onSelectedSlotChanged?(clicked)
+                } else {
+                    onSelectedSlotChanged?(nil)
+                }
+            } else {
+                onSelectedSlotChanged?(nil)
+                onEmptySlotClicked?(clicked, slots[clicked].id)
+            }
+        }
+        pendingClickSlotIndex = nil
         dragCandidateIndex = nil
-
-        let currentTarget = RingPreviewLayoutHelper.hitTest(at: pointInSquare,
-                                                            in: geometry,
-                                                            slots: slots,
-                                                            activeHoverSlot: hoveredSlotIndex)
-        let triggered = pendingTarget
-        pendingTarget = nil
-
-        switch (triggered, currentTarget) {
-        case (.emptySlot(let idx1), .emptySlot(let idx2)) where idx1 == idx2:
-            if slots.indices.contains(idx1) {
-                onEmptySlotClicked?(idx1, slots[idx1].id)
-            }
-        case (.occupiedSlot(let idx1, button: .edit), .occupiedSlot(let idx2, button: .edit)) where idx1 == idx2:
-            if slots.indices.contains(idx1) {
-                onEditSlotClicked?(idx1, slots[idx1].id)
-            }
-        case (.occupiedSlot(let idx1, button: .delete), .occupiedSlot(let idx2, button: .delete)) where idx1 == idx2:
-            if slots.indices.contains(idx1) {
-                onDeleteSlotClicked?(idx1, slots[idx1].id)
-            }
-        default:
-            break
-        }
-
-        updateHoverState(at: localPoint)
-        updateFocusAndCenter()
-        window?.invalidateCursorRects(for: self)
     }
 
-    override func resetCursorRects() {
-        super.resetCursorRects()
-        guard let geometry = cachedGeometry, cachedSquareFrame.width > 0 else { return }
-        for (index, frame) in geometry.iconFrames.enumerated() {
-            guard slots.indices.contains(index) else { continue }
-            let rectInHost = CGRect(x: cachedSquareFrame.origin.x + frame.origin.x,
-                                    y: cachedSquareFrame.origin.y + frame.origin.y,
-                                    width: frame.width,
-                                    height: frame.height)
-            addCursorRect(rectInHost, cursor: .pointingHand)
-        }
-    }
-
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        window?.acceptsMouseMovedEvents = true
-        let scale = window?.backingScaleFactor ?? 2.0
+    func cancelDrag() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        editButtonLayer.contentsScale = scale
-        deleteButtonLayer.contentsScale = scale
-        dragGhostLayer.contentsScale = scale
-        targetHighlightLayer.contentsScale = scale
-        focusHighlightLayer.contentsScale = scale
-        centerTitleLayer.contentsScale = scale
-        centerSubtitleLayer.contentsScale = scale
+        isDragging = false
+        dragCandidateIndex = nil
+        dragGhostLayer.isHidden = true
+        targetHighlightLayer.isHidden = true
         CATransaction.commit()
-        layoutPreview()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        centerTitleLayer.foregroundColor = NSColor.labelColor.cgColor
-        centerSubtitleLayer.foregroundColor = NSColor.secondaryLabelColor.cgColor
-        focusHighlightLayer.strokeColor = NSColor.keyboardFocusIndicatorColor.cgColor
-        CATransaction.commit()
-        layoutPreview()
-        updateOverlay()
-        updateFocusAndCenter()
-    }
-
-    func update(slots: [Slot]) {
-        self.slots = slots
-        if let focused = focusedSlotIndex, focused >= slots.count {
-            focusedSlotIndex = slots.isEmpty ? nil : slots.count - 1
-        }
-        if let hovered = hoveredSlotIndex, (!slots.indices.contains(hovered) || slots[hovered].app == nil) {
-            hoveredSlotIndex = nil
-            hoveredButton = nil
-        }
-        layoutPreview()
-        updateOverlay()
-        updateFocusAndCenter()
-    }
-
-    override func layout() {
-        super.layout()
-        layoutPreview()
-    }
-
-    private func layoutPreview() {
-        let containerBounds = bounds
-        guard containerBounds.width > 0, containerBounds.height > 0 else { return }
-
-        // Scale proportionally to fit the available box, centered with margins for drop shadows
-        let side = min(containerBounds.width, containerBounds.height)
-        guard side > 0 else { return }
-
-        let originX = (containerBounds.width - side) / 2
-        let originY = (containerBounds.height - side) / 2
-        let squareFrame = CGRect(x: originX, y: originY, width: side, height: side)
-
-        cachedSquareFrame = squareFrame
-        materialView.frame = squareFrame
-        ringView.frame = squareFrame
-        overlayView.frame = squareFrame
-
-        let geometry = RingLayout.geometry(slotCount: slots.count, side: side, panelOrigin: .zero)
-        cachedGeometry = geometry
-
-        materialView.selectedSlot = nil
-        materialView.prepare(geometry: geometry)
-
-        let items = slots.map { slot in
-            RingView.Item(name: slot.app?.displayName ?? "",
-                          icon: slot.app.map { NSWorkspace.shared.icon(forFile: $0.path) },
-                          isFilled: slot.app != nil)
-        }
-        ringView.present(geometry: geometry,
-                         items: items,
-                         mode: .angularClick,
-                         decision: nil)
-
-        let center = CGPoint(x: squareFrame.midX, y: squareFrame.midY)
-        let unit = RingPresentation.unit(plateRect: geometry.plateRect)
-        let holeRadius = unit * RingPresentation.holeRadius
-        let infoWidth = max(2 * holeRadius - 16, 70)
-
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        centerTitleLayer.frame = CGRect(x: center.x - infoWidth / 2,
-                                        y: center.y - 2,
-                                        width: infoWidth,
-                                        height: 22)
-        centerSubtitleLayer.frame = CGRect(x: center.x - infoWidth / 2,
-                                           y: center.y - 22,
-                                           width: infoWidth,
-                                           height: 18)
-        CATransaction.commit()
-
-        window?.invalidateCursorRects(for: self)
-        updateOverlay()
-        updateFocusAndCenter()
+        NSCursor.arrow.set()
+        updateFocusAndHub()
     }
 }
 
+// MARK: - Footer 底栏（对齐 HTML footer）
 
-
-
-// MARK: - Footer
-
-private struct SettingsFooterView: View {
+struct SettingsFooterView: View {
     @ObservedObject var model: SettingsModel
 
     var body: some View {
@@ -989,64 +1536,74 @@ private struct SettingsFooterView: View {
                 Label("打开配置目录", systemImage: "folder")
             }
             .buttonStyle(.link)
-            .font(.system(size: 12))
+            .font(.system(size: 12.5, weight: .medium))
             .help("在访达中显示 configuration.json")
+
+            Spacer(minLength: 8)
+
             if let error = model.lastError {
                 Text(error)
                     .font(.system(size: 11))
-                    .foregroundStyle(.red)
+                    .foregroundColor(.red)
                     .lineLimit(1)
                     .help(error)
+            } else {
+                Text("所有更改已保存")
+                    .font(.system(size: 12))
+                    .foregroundColor(Color.black.opacity(0.45))
             }
-            Spacer(minLength: 8)
-            Button("保存") { model.save() }
-                .keyboardShortcut("s", modifiers: .command)
-                .buttonStyle(.borderedProminent)
-                .controlSize(.regular)
         }
-        .frame(minHeight: Layout.footerMinHeight)
+        .frame(minHeight: HTMLSpecs.footerHeight)
     }
 }
 
-// MARK: - Shared card chrome
+// MARK: - 通用卡片外观（对齐 HTML .mac-card）
 
-/// One card look for both columns and the permission area: a soft system surface with a
-/// hairline edge, so the page reads as layers instead of a single grey sheet.
 struct SettingsCard<Content: View>: View {
-    var padding: CGFloat = Layout.cardPadding
-    /// Both the preview card and the slots card stretch vertically so their borders line up evenly.
+    var horizontalPadding: CGFloat = 16
+    var verticalPadding: CGFloat = 14
     var stretchesVertically: Bool = false
     @ViewBuilder var content: Content
 
+    init(padding: CGFloat = 16, stretchesVertically: Bool = false, @ViewBuilder content: () -> Content) {
+        self.horizontalPadding = padding
+        self.verticalPadding = padding
+        self.stretchesVertically = stretchesVertically
+        self.content = content()
+    }
+
+    init(horizontalPadding: CGFloat = 16, verticalPadding: CGFloat = 14, stretchesVertically: Bool = false, @ViewBuilder content: () -> Content) {
+        self.horizontalPadding = horizontalPadding
+        self.verticalPadding = verticalPadding
+        self.stretchesVertically = stretchesVertically
+        self.content = content()
+    }
+
     var body: some View {
         content
-            .padding(padding)
+            .padding(.horizontal, horizontalPadding)
+            .padding(.vertical, verticalPadding)
             .frame(maxWidth: .infinity,
                    maxHeight: stretchesVertically ? .infinity : nil,
                    alignment: .topLeading)
             .background(
-                RoundedRectangle(cornerRadius: Layout.cardCorner, style: .continuous)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                RoundedRectangle(cornerRadius: HTMLSpecs.cardCorner, style: .continuous)
+                    .fill(HTMLSpecs.cardBackground)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: Layout.cardCorner, style: .continuous)
-                    .strokeBorder(Color(nsColor: .separatorColor), lineWidth: 1)
+                RoundedRectangle(cornerRadius: HTMLSpecs.cardCorner, style: .continuous)
+                    .strokeBorder(HTMLSpecs.cardBorder, lineWidth: 1)
             )
+            .shadow(color: HTMLSpecs.cardShadowColor, radius: 1, x: 0, y: 1)
     }
 }
 
-// MARK: - Model
+// MARK: - SettingsModel (完整的配置与插槽持久化)
 
 final class SettingsModel: ObservableObject {
     @Published var slots: [Slot]
-    /// How many leading slots the list, the preview and the ring show. The full array is
-    /// always kept, so lowering this only hides slots.
     @Published var visibleSlotCount: Int
-    /// How long the ring takes to open, in whole milliseconds; 0 shows it at once.
     @Published var entranceDurationMilliseconds: Int
-    /// Exactly what the field shows. Nothing is saved while the text cannot be parsed; a
-    /// number that does parse (even a short one on the way to a longer one) is what a commit
-    /// saves, because the field is what the page shows.
     @Published var entranceDurationText: String
     @Published var entranceDurationError: String?
     @Published var lastError: String?
@@ -1069,9 +1626,6 @@ final class SettingsModel: ObservableObject {
         Array(slots.prefix(visibleSlotCount))
     }
 
-
-    /// Changes the visible count only; nothing is deleted, so raising it again restores
-    /// the same apps, ids and order.
     func setVisibleSlotCount(_ value: Int) {
         let clamped = min(max(value, LauncherConfiguration.visibleSlotRange.lowerBound),
                           LauncherConfiguration.visibleSlotRange.upperBound)
@@ -1080,14 +1634,12 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
-
     func chooseApp(at index: Int) {
         guard visibleSlots.indices.contains(index) else { return }
         let slot = visibleSlots[index]
         activePickerTarget = PickerTarget(slotID: slot.id, slotIndex: index)
     }
 
-    /// Re-locates the slot by UUID and writes back the selected application.
     func assignApp(_ reference: AppReference, toSlotID targetSlotID: UUID) {
         let updated = QuickAppWriter.apply(reference: reference, toSlotID: targetSlotID, in: config)
         guard updated != config else { return }
@@ -1095,7 +1647,6 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
-    /// Fallback: runs NSOpenPanel to choose a custom .app bundle, re-locating the slot by UUID.
     func chooseAppCustom(forSlotID targetSlotID: UUID) {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
@@ -1121,8 +1672,6 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
-    /// Swaps the assigned applications between two occupied slots on the preview ring,
-    /// keeping all slot IDs, the visible slot count, and the hidden tail intact.
     func swapApps(at sourceIndex: Int, and targetIndex: Int) {
         let updated = RingPreviewSlotSwap.swap(in: config, source: sourceIndex, destination: targetIndex)
         guard updated != config else { return }
@@ -1130,15 +1679,11 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
-    /// Types into the field only; nothing is written until the text is committed.
     func updateEntranceDurationText(_ text: String) {
         entranceDurationText = text
         entranceDurationError = nil
     }
 
-    /// Return or leaving the field. A value that is not a whole number of milliseconds in
-    /// range is refused in words and the field goes back to the saved value: the page never
-    /// shows a timing the ring will not use.
     func commitEntranceDuration() {
         guard let typed = LauncherConfiguration.entranceMilliseconds(fromInput: entranceDurationText) else {
             entranceDurationError = "展开时长需为 0…2000 之间的整数毫秒，已恢复为 \(entranceDurationMilliseconds)"
@@ -1164,9 +1709,6 @@ final class SettingsModel: ObservableObject {
     }
 
     private func commit() {
-        // The duration field is part of what the page shows, so a commit takes it too: an
-        // entry that is not a whole number in range is replaced by the saved value with a
-        // message instead of reaching the file, and the rest of the page still saves.
         if let typed = LauncherConfiguration.entranceMilliseconds(fromInput: entranceDurationText) {
             entranceDurationMilliseconds = typed
             entranceDurationError = nil
@@ -1188,11 +1730,11 @@ final class SettingsModel: ObservableObject {
             lastError = nil
             onConfigChange?(normalized)
         } catch {
-            // Nothing was written: the field goes back to the value the file really holds,
-            // so "saved" on screen and "saved" in the file cannot disagree.
+            slots = config.slots
+            visibleSlotCount = config.visibleSlotCount
             entranceDurationMilliseconds = config.entranceDurationMilliseconds
             entranceDurationText = String(entranceDurationMilliseconds)
-            lastError = "未保存：\(error)"
+            lastError = "未保存：\(error.localizedDescription)"
         }
     }
 }

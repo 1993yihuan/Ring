@@ -732,30 +732,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 if countChanged { self.cancelRing() }
             }
             settingsModel = model
-            // The page declares its own floor (SettingsWindowGeometry.minimumSize, capped
-            // by the screen), so the hosting controller's minimum is a size the user can
-            // still reach. Before that the page reported 1185 pt of minimum
-            // height on a 1090 pt screen, and the window opened past the display and
-            // could not be dragged back.
-            // One navigation shell around the page that already exists: the ring page is
-            // embedded untouched, the other four sidebar pages are placeholders.
             guard let trigger else {
                 presentErrorAlert("触发设置未就绪，无法打开设置。请重启 Ring。")
                 return
             }
-            let hosting = NSHostingController(rootView: SettingsRootView(model: model, trigger: trigger))
-            let window = NSWindow(contentViewController: hosting)
-            // The native title bar carries the name: the page itself must not repeat it. The
-            // title text and the bar's own background are hidden so the window reads as one
-            // surface; the content still starts below the title bar (there is no full-size
-            // content view), so the sidebar begins under the traffic lights, not behind them.
-            window.title = "Ring 设置"
-            window.titlebarAppearsTransparent = true
-            window.titleVisibility = .hidden
-            // Resizable because slot lists and application names vary in length;
-            // the page scrolls its list instead of growing the window on every message.
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.isReleasedWhenClosed = false
+            let window = SettingsRootView(model: model, trigger: trigger).makeWindow()
             // A window the screen under it can hold, and a minimum that still fits there.
             // Reopening reuses this window, so the size the user dragged is kept.
             let visible = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame

@@ -5,18 +5,17 @@ import CoreGraphics
 /// controller reported a minimum height larger than the visible area, and the user could
 /// not shrink it back.
 public enum SettingsWindowGeometry {
-    /// The navigation column on the left. Fixed, so switching pages never resizes the window.
-    public static let sidebarWidth: CGFloat = 200
-    /// The ring page's own floor: the width the cards were laid out for. The window has to hold
-    /// this plus the sidebar, which is why the two totals below are that much wider.
-    public static let detailMinimumWidth: CGFloat = 720
-    /// The size a roomy screen gets: the old content size beside the sidebar.
+    /// The navigation column on the left. Fixed, matching the 210pt redesigned sidebar.
+    public static let sidebarWidth: CGFloat = 210
+    /// The ring page's own floor: what is left beside the sidebar at the window's minimum width (800 - 210 = 590).
+    public static let detailMinimumWidth: CGFloat = 590
+    /// The size a roomy screen gets: 880x600 matching the prototype.
     public static var preferredContentSize: CGSize {
-        CGSize(width: detailMinimumWidth + 240 + sidebarWidth, height: 640)
+        CGSize(width: 880, height: 600)
     }
-    /// The smallest content box the window may have: the old minimum plus the sidebar.
+    /// The smallest content box the window may have.
     public static var minimumContentSize: CGSize {
-        CGSize(width: detailMinimumWidth + sidebarWidth, height: 520)
+        CGSize(width: 800, height: 560)
     }
     /// Room for the title bar and a margin around the window on the desktop.
     public static let screenInset: CGFloat = 40

@@ -1973,25 +1973,27 @@ final class SettingsWindowGeometryTests: XCTestCase {
     private let laptop = CGRect(x: 0, y: 0, width: 1792, height: 1090)
 
     func testRoomyScreenGetsTheDesignedDefaultAndMinimum() {
-        // 左侧栏占 200 pt：窗口 = 侧栏 + 详情列，详情列仍是原来的 960 / 720。
-        XCTAssertEqual(SettingsWindowGeometry.sidebarWidth, 200)
-        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop), CGSize(width: 1160, height: 640))
-        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop), CGSize(width: 920, height: 520))
-        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: laptop), CGSize(width: 720, height: 520))
+        // 左侧栏占 210 pt：默认窗口 = 880 x 600，默认详情列为 670；最小窗口 800 对应详情列下限 590。
+        XCTAssertEqual(SettingsWindowGeometry.sidebarWidth, 210)
+        XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop), CGSize(width: 880, height: 600))
+        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop), CGSize(width: 800, height: 560))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: laptop), CGSize(width: 590, height: 560))
         XCTAssertEqual(SettingsWindowGeometry.contentSize(fitting: laptop).width
-                        - SettingsWindowGeometry.sidebarWidth, 960)
+                        - SettingsWindowGeometry.sidebarWidth, 670)
+        XCTAssertEqual(SettingsWindowGeometry.minimumSize(fitting: laptop).width
+                        - SettingsWindowGeometry.sidebarWidth, SettingsWindowGeometry.detailMinimumWidth)
     }
 
-    /// A short screen cannot hold 640 pt of content plus a title bar: the window must give
+    /// A short screen cannot hold 600 pt of content plus a title bar: the window must give
     /// way, not hang off the display.
     func testShortScreenShrinksTheDefaultAndTheMinimum() {
         let short = CGRect(x: 0, y: 0, width: 1024, height: 600)
         let content = SettingsWindowGeometry.contentSize(fitting: short)
         let minimum = SettingsWindowGeometry.minimumSize(fitting: short)
-        // 高度按屏幕压到 520；宽度仍放得下 侧栏 + 720 详情。
-        XCTAssertEqual(content, CGSize(width: 944, height: 520))
-        XCTAssertEqual(minimum, CGSize(width: 920, height: 520))
-        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: short), CGSize(width: 720, height: 520))
+        // 高度按屏幕压到 520；宽度仍放得下 侧栏 + 详情。
+        XCTAssertEqual(content, CGSize(width: 880, height: 520))
+        XCTAssertEqual(minimum, CGSize(width: 800, height: 520))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: short), CGSize(width: 590, height: 520))
         XCTAssertLessThanOrEqual(content.height, minimum.height == 0 ? 0 : short.height - 2 * SettingsWindowGeometry.screenInset)
         XCTAssertLessThanOrEqual(minimum.width, content.width)
         XCTAssertLessThanOrEqual(minimum.height, content.height)
@@ -2001,10 +2003,10 @@ final class SettingsWindowGeometryTests: XCTestCase {
         let tiny = CGRect(x: 0, y: 0, width: 800, height: 500)
         let content = SettingsWindowGeometry.contentSize(fitting: tiny)
         let minimum = SettingsWindowGeometry.minimumSize(fitting: tiny)
-        // 屏宽 800 放不下 920：窗口被压到 720，详情列随之只有 520，页面自己滚动。
+        // 屏宽 800 放不下 800+40：窗口被压到 720，详情列随之只有 510，页面自己滚动。
         XCTAssertEqual(content, CGSize(width: 720, height: 420))
         XCTAssertEqual(minimum, CGSize(width: 720, height: 420))
-        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: tiny), CGSize(width: 520, height: 420))
+        XCTAssertEqual(SettingsWindowGeometry.detailMinimumSize(fitting: tiny), CGSize(width: 510, height: 420))
         XCTAssertLessThanOrEqual(minimum.height, content.height)
         XCTAssertLessThanOrEqual(SettingsWindowGeometry.sidebarWidth
                                     + SettingsWindowGeometry.detailMinimumSize(fitting: tiny).width,
