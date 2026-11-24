@@ -2069,103 +2069,15 @@ final class SettingsWindowGeometryTests: XCTestCase {
 final class RingLaunchAnimationTests: XCTestCase {
     private let accuracy: CGFloat = 0.0001
 
-    /// The screen points that decide whether the reveal reads clockwise: 12 o'clock at 0°,
-    /// 3 o'clock at 90°, 6 at 180°, 9 at 270°.
-    private func point(at degrees: Double, from centre: CGPoint, distance: CGFloat = 60) -> CGPoint {
-        let radians = (90 - degrees) * .pi / 180
-        return CGPoint(x: centre.x + distance * cos(radians), y: centre.y + distance * sin(radians))
-    }
-
-    /// A quarter of the time uncovers the quarter from 12 o'clock to 3 o'clock, and nothing
-    /// beyond it: the sweep starts at the top and runs clockwise on screen.
-    func testAQuarterOfTheTimeUncoversTwelveToThree() {
-        let centre = CGPoint(x: 106, y: 106)
-        let progress = RingLaunchAnimation.sweepProgress(at: 0.035, milliseconds: 140)
-        XCTAssertEqual(progress, 0.25, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepDegrees(progress: progress), 90, accuracy: 1e-9)
-
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 15, from: centre), centre: centre, progress: progress))
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 89.9, from: centre), centre: centre, progress: progress))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 90.1, from: centre), centre: centre, progress: progress))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 180, from: centre), centre: centre, progress: progress))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: progress))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 359, from: centre), centre: centre, progress: progress))
-    }
-
-    /// Half the time is the right half of the circle, three quarters is everything except the
-    /// upper-left quadrant, and the full time is the whole ring.
-    func testHalfThreeQuartersAndCompleteCoverTheRemainingQuadrants() {
-        let centre = CGPoint(x: 106, y: 106)
-        let half = RingLaunchAnimation.sweepProgress(at: 0.07, milliseconds: 140)
-        XCTAssertEqual(half, 0.5, accuracy: 1e-9)
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 90, from: centre), centre: centre, progress: half))
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 180, from: centre), centre: centre, progress: half))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: half))
-
-        let threeQuarters = RingLaunchAnimation.sweepProgress(at: 0.105, milliseconds: 140)
-        XCTAssertEqual(threeQuarters, 0.75, accuracy: 1e-9)
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: 270, from: centre), centre: centre, progress: threeQuarters))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 300, from: centre), centre: centre, progress: threeQuarters),
-                       "9 点之后的那一段还没扫到")
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(point(at: 350, from: centre), centre: centre, progress: threeQuarters))
-
-        let complete = RingLaunchAnimation.sweepProgress(at: 0.14, milliseconds: 140)
-        for degrees in [0.1, 90, 180, 270, 359] {
-            XCTAssertTrue(RingLaunchAnimation.sweepContains(point(at: degrees, from: centre), centre: centre, progress: complete))
-        }
-    }
-
-    /// Linear over the configured total, clamped at both ends, whatever the total is.
-    func testProgressIsLinearOverTheConfiguredTime() {
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 275), 0, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.06875, milliseconds: 275), 0.25, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.1375, milliseconds: 275), 0.5, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.20625, milliseconds: 275), 0.75, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.275, milliseconds: 275), 1, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 9, milliseconds: 275), 1, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: -1, milliseconds: 275), 0, accuracy: 1e-9)
-        // 0 毫秒没有入场时间：一开始就是完整画面。
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 0), 0, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.001, milliseconds: 0), 1, accuracy: 1e-9)
-    }
-
-    /// The angle is the one the user sees on a y-up layer: clockwise from 12 o'clock, so a
-    /// point on the +y axis is 0° and one just clockwise of it is a small positive angle.
-    func testTheAngleIsClockwiseFromTwelveOnAYUpLayer() {
-        let centre = CGPoint(x: 106, y: 106)
-        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 106, y: 166), centre: centre), 0, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 166, y: 106), centre: centre), 90, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 106, y: 46), centre: centre), 180, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 46, y: 106), centre: centre), 270, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepAngleDegrees(of: CGPoint(x: 107, y: 166), centre: centre), 0.9548, accuracy: 0.001,
-                       "12 点稍右一点就是刚开始扫过的方向")
-    }
-
-    /// The mask's path is one arc that starts at 12 o'clock and closes the circle, so a stroke
-    /// end of a quarter is the quarter arc and not a chord.
-    func testTheArcPathStartsAtTwelveAndCoversTheWholeCircle() {
-        let centre = CGPoint(x: 106, y: 106)
-        let radius: CGFloat = 150
-        let path = RingLaunchAnimation.sweepArcPath(centre: centre, radius: radius)
-        XCTAssertFalse(path.isEmpty)
-        let box = path.boundingBoxOfPath
-        XCTAssertEqual(box.midX, centre.x, accuracy: 0.5)
-        XCTAssertEqual(box.midY, centre.y, accuracy: 0.5)
-        XCTAssertEqual(box.width, radius * 2, accuracy: 1)
-        // The mask is a *stroke* of this arc, not a fill: what matters is that the arc runs
-        // the whole circle (the box above) and that nothing outside it can be uncovered.
-        XCTAssertFalse(path.contains(CGPoint(x: 106, y: 106 + 200)), "弧半径之外")
-    }
-
     /// Reduce Motion is the same picture with every duration at zero; the callers then take
     /// the one branch that writes the final values and finishes at once.
     func testReduceMotionCollapsesEveryDurationAndChangesNothingElse() {
         XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 140, reduceMotion: true), 0)
-        XCTAssertEqual(RingLaunchAnimation.exitDuration(reduceMotion: true), 0)
+        XCTAssertEqual(RingLaunchAnimation.exitDuration(entranceMilliseconds: 140, reduceMotion: true), 0)
         XCTAssertEqual(RingLaunchAnimation.highlightDuration(reduceMotion: true), 0)
 
         XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 140, reduceMotion: false), 0.14, accuracy: 0.000001)
-        XCTAssertEqual(RingLaunchAnimation.exitDuration(reduceMotion: false), 0.06, accuracy: 0.000001)
+        XCTAssertEqual(RingLaunchAnimation.exitDuration(entranceMilliseconds: 140, reduceMotion: false), 0.105, accuracy: 0.000001)
         XCTAssertEqual(RingLaunchAnimation.highlightDuration(reduceMotion: false), 0.05, accuracy: 0.000001)
     }
 
@@ -2350,23 +2262,14 @@ final class EntranceDurationConfigurationTests: XCTestCase {
         }
     }
 
-    /// 275 ms is what the layer really plays: the same sweep, a quarter of the circle every
-    /// 68.75 ms, and the icons never part of it.
-    func testAConfiguredDurationSweepsAQuarterEveryQuarterOfTheTime() {
+    /// 275 ms drives the gentle scale entrance and clamps its paired exit duration.
+    func testAConfiguredDurationDrivesPairedGentleScaleSpec() {
         XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 275, reduceMotion: false),
                        0.275, accuracy: 0.000001)
-        let centre = CGPoint(x: 106, y: 106)
-        let threeOClock = CGPoint(x: 166, y: 106)
-        let sixOClock = CGPoint(x: 106, y: 46)
-
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(threeOClock, centre: centre,
-                                                        progress: RingLaunchAnimation.sweepProgress(at: 0.0687, milliseconds: 275)))
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(threeOClock, centre: centre,
-                                                       progress: RingLaunchAnimation.sweepProgress(at: 0.0688, milliseconds: 275)))
-        XCTAssertTrue(RingLaunchAnimation.sweepContains(sixOClock, centre: centre,
-                                                       progress: RingLaunchAnimation.sweepProgress(at: 0.1375, milliseconds: 275)))
-        XCTAssertFalse(RingLaunchAnimation.sweepContains(sixOClock, centre: centre,
-                                                        progress: RingLaunchAnimation.sweepProgress(at: 0.1374, milliseconds: 275)))
+        let spec = RingLaunchAnimation.spec(entranceMilliseconds: 275, reduceMotion: false)
+        XCTAssertEqual(spec.entranceDuration, 0.275, accuracy: 0.000001)
+        XCTAssertEqual(spec.exitDuration, 0.18, accuracy: 0.000001)
+        XCTAssertEqual(spec.previewHoldDuration, 0.45, accuracy: 0.000001)
     }
 
     /// Reduce Motion wins for that run only: the saved value is not rewritten, so the timing
@@ -2385,11 +2288,14 @@ final class EntranceDurationConfigurationTests: XCTestCase {
                        0.275, accuracy: 0.000001)
     }
 
-    /// 0 ms means the ring is complete in its first frame: no entrance time and no sector.
+    /// 0 ms means the ring is complete in its first frame: zero entrance, exit, and hold durations.
     func testZeroMillisecondsMeansNoEntranceTime() {
         XCTAssertEqual(RingLaunchAnimation.entranceDuration(milliseconds: 0, reduceMotion: false), 0)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0, milliseconds: 0), 0, accuracy: 1e-9)
-        XCTAssertEqual(RingLaunchAnimation.sweepProgress(at: 0.001, milliseconds: 0), 1, accuracy: 1e-9)
+        XCTAssertEqual(RingLaunchAnimation.exitDuration(entranceMilliseconds: 0, reduceMotion: false), 0)
+        let spec = RingLaunchAnimation.spec(entranceMilliseconds: 0, reduceMotion: false)
+        XCTAssertEqual(spec.entranceDuration, 0, accuracy: 1e-9)
+        XCTAssertEqual(spec.exitDuration, 0, accuracy: 1e-9)
+        XCTAssertEqual(spec.previewHoldDuration, 0, accuracy: 1e-9)
     }
 }
 

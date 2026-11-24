@@ -134,6 +134,27 @@ public enum RingPreviewLayoutHelper {
         }
         return nil
     }
+
+    /// Returns a downward drop-shadow offset in the target view's coordinate system.
+    /// AppKit unflipped (`isFlipped == false`, y-up) uses negative y to cast downward;
+    /// flipped (`isFlipped == true`, y-down) uses positive y to cast downward.
+    public static func downwardShadowOffset(verticalDistance: CGFloat = 14.0, isFlipped: Bool) -> CGSize {
+        CGSize(width: 0, height: isFlipped ? verticalDistance : -verticalDistance)
+    }
+
+    /// Returns true only when slot layers actually need to be rebuilt due to slot content,
+    /// layout bounds, or backing scale changes (avoiding redundant teardown during animation).
+    public static func shouldRebuildSlotLayers(previousSlots: [Slot]?,
+                                               currentSlots: [Slot],
+                                               previousSize: CGSize?,
+                                               currentSize: CGSize,
+                                               previousScale: CGFloat?,
+                                               currentScale: CGFloat) -> Bool {
+        guard let previousSlots, let previousSize, let previousScale else {
+            return true
+        }
+        return previousSlots != currentSlots || previousSize != currentSize || previousScale != currentScale
+    }
 }
 
 /// Swaps or moves applications between preview slots in a configuration directly.

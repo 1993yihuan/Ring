@@ -1,66 +1,132 @@
 import CoreGraphics
 import Foundation
+import QuartzCore
 
-/// The launcher's entrance is a clockwise reveal: the ring appears as one sector that grows
-/// from 12 o'clock, at a steady speed over the configured total. Nothing is scaled, rotated
-/// or faded as a whole, so the icons and the hit frames keep their final place for the whole
-/// entrance and the centre copy is never part of the sweep.
+public enum RingLaunchTimingFunction: Sendable, Equatable {
+    case linear
+    case easeOut
+    case cubicBezier(Float, Float, Float, Float)
+
+    public var caTimingFunction: CAMediaTimingFunction {
+        switch self {
+        case .linear:
+            return CAMediaTimingFunction(name: .linear)
+        case .easeOut:
+            return CAMediaTimingFunction(name: .easeOut)
+        case .cubicBezier(let c1x, let c1y, let c2x, let c2y):
+            return CAMediaTimingFunction(controlPoints: c1x, c1y, c2x, c2y)
+        }
+    }
+}
+
+public struct RingLaunchAnimationSpec: Sendable, Equatable {
+    public let entranceDuration: TimeInterval
+    public let exitDuration: TimeInterval
+    public let previewHoldDuration: TimeInterval
+    public let entranceStartScale: CGFloat
+    public let entranceEndScale: CGFloat
+    public let entranceStartOpacity: Float
+    public let entranceEndOpacity: Float
+    public let exitTargetScale: CGFloat
+    public let exitTargetOpacity: Float
+    public let entranceTiming: RingLaunchTimingFunction
+    public let exitTiming: RingLaunchTimingFunction
+
+    public init(entranceDuration: TimeInterval,
+                exitDuration: TimeInterval,
+                previewHoldDuration: TimeInterval,
+                entranceStartScale: CGFloat,
+                entranceEndScale: CGFloat,
+                entranceStartOpacity: Float,
+                entranceEndOpacity: Float,
+                exitTargetScale: CGFloat,
+                exitTargetOpacity: Float,
+                entranceTiming: RingLaunchTimingFunction,
+                exitTiming: RingLaunchTimingFunction) {
+        self.entranceDuration = entranceDuration
+        self.exitDuration = exitDuration
+        self.previewHoldDuration = previewHoldDuration
+        self.entranceStartScale = entranceStartScale
+        self.entranceEndScale = entranceEndScale
+        self.entranceStartOpacity = entranceStartOpacity
+        self.entranceEndOpacity = entranceEndOpacity
+        self.exitTargetScale = exitTargetScale
+        self.exitTargetOpacity = exitTargetOpacity
+        self.entranceTiming = entranceTiming
+        self.exitTiming = exitTiming
+    }
+}
+
+/// Shared launch animation specs and math used by both the live launcher panel and the
+/// settings preview canvas so timing, curves, and scale pivots stay identical.
 public enum RingLaunchAnimation {
-    /// The ring is already gone for input; only the last frame is left to fade.
-    public static let exitSeconds: TimeInterval = 0.06
     /// A new highlight fades in over this; the icons and the hit frames never move.
     public static let highlightSeconds: TimeInterval = 0.05
-
-    /// How much of the circle has appeared at a moment, 0…1. Straight linear: a quarter of
-    /// the time is a quarter of the circle, so 3 o'clock at 25 %, 6 at 50 %, 9 at 75 %.
-    public static func sweepProgress(at elapsed: TimeInterval,
-                                     milliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds) -> Double {
-        let total = Double(milliseconds) / 1000
-        guard total > 0 else { return elapsed > 0 ? 1 : 0 }
-        return min(max(elapsed / total, 0), 1)
-    }
-
-    /// The arc uncovered so far, in degrees clockwise from 12 o'clock.
-    public static func sweepDegrees(progress: Double) -> Double {
-        min(max(progress, 0), 1) * 360
-    }
-
-    /// Where one point sits in the sweep: its angle clockwise from 12 o'clock, in degrees.
-    /// Layer space is y-up, so 12 o'clock is +y and clockwise means the angle decreases.
-    public static func sweepAngleDegrees(of point: CGPoint, centre: CGPoint) -> Double {
-        var degrees = 90 - atan2(Double(point.y - centre.y), Double(point.x - centre.x)) * 180 / .pi
-        degrees = degrees.truncatingRemainder(dividingBy: 360)
-        return degrees < 0 ? degrees + 360 : degrees
-    }
-
-    /// Whether the sweep has reached a point yet. This is the mask's meaning in numbers, so
-    /// tests and probes can ask the same question the picture answers.
-    public static func sweepContains(_ point: CGPoint, centre: CGPoint, progress: Double) -> Bool {
-        sweepAngleDegrees(of: point, centre: centre) <= sweepDegrees(progress: progress) + 1e-9
-    }
-
-    /// The mask's path: one full circular arc that starts at 12 o'clock and runs clockwise.
-    /// Stroked as wide as its own radius it fills a pie, so a stroke end of 0.25 uncovers the
-    /// quarter from 12 o'clock to 3 o'clock and nothing else.
-    public static func sweepArcPath(centre: CGPoint, radius: CGFloat) -> CGPath {
-        let path = CGMutablePath()
-        guard radius > 0 else { return path }
-        path.addArc(center: centre,
-                    radius: radius,
-                    startAngle: .pi / 2,
-                    endAngle: .pi / 2 - 2 * .pi,
-                    clockwise: true)
-        return path
-    }
+    /// Collapsed scale & opacity for the gentle scale & fade launch animation.
+    public static let gentleScaleCollapsedScale: CGFloat = 0.45
+    public static let gentleScaleCollapsedOpacity: Float = 0.0
+    /// Hold duration between entrance and exit when previewing in Settings.
+    public static let previewHoldSeconds: TimeInterval = 0.45
+    /// Clamped exit duration bounds for the gentle scale & fade launch animation.
+    public static let gentleScaleExitMinSeconds: TimeInterval = 0.10
+    public static let gentleScaleExitMaxSeconds: TimeInterval = 0.18
+    public static let gentleScaleExitRatio: Double = 0.75
+    /// Timing curve control points for the gentle scale & fade launch animation.
+    public static let gentleScaleEntranceTiming = RingLaunchTimingFunction.cubicBezier(0.22, 1.0, 0.36, 1.0)
+    public static let gentleScaleExitTiming = RingLaunchTimingFunction.cubicBezier(0.4, 0.0, 1.0, 1.0)
 
     /// The launcher reads this with the value saved in the configuration each time it opens;
     /// Reduce Motion still wins and collapses it to zero for this run only.
     public static func entranceDuration(milliseconds: Int, reduceMotion: Bool) -> TimeInterval {
-        reduceMotion ? 0 : Double(milliseconds) / 1000
+        reduceMotion || milliseconds <= 0 ? 0 : Double(milliseconds) / 1000
     }
 
-    public static func exitDuration(reduceMotion: Bool) -> TimeInterval {
-        reduceMotion ? 0 : exitSeconds
+    public static func exitDuration(entranceMilliseconds: Int, reduceMotion: Bool) -> TimeInterval {
+        guard !reduceMotion, entranceMilliseconds > 0 else { return 0 }
+        let scaled = (Double(entranceMilliseconds) / 1000.0) * gentleScaleExitRatio
+        return min(max(scaled, gentleScaleExitMinSeconds), gentleScaleExitMaxSeconds)
+    }
+
+    public static func spec(entranceMilliseconds: Int, reduceMotion: Bool) -> RingLaunchAnimationSpec {
+        let entrance = entranceDuration(milliseconds: entranceMilliseconds, reduceMotion: reduceMotion)
+        let exit = exitDuration(entranceMilliseconds: entranceMilliseconds, reduceMotion: reduceMotion)
+        let hold = entrance > 0 ? previewHoldSeconds : 0
+        return RingLaunchAnimationSpec(
+            entranceDuration: entrance,
+            exitDuration: exit,
+            previewHoldDuration: hold,
+            entranceStartScale: gentleScaleCollapsedScale,
+            entranceEndScale: 1.0,
+            entranceStartOpacity: gentleScaleCollapsedOpacity,
+            entranceEndOpacity: 1.0,
+            exitTargetScale: gentleScaleCollapsedScale,
+            exitTargetOpacity: gentleScaleCollapsedOpacity,
+            entranceTiming: gentleScaleEntranceTiming,
+            exitTiming: gentleScaleExitTiming
+        )
+    }
+
+    /// Builds a uniform `CATransform3D` scaling around `centre` in the layer's bounds space,
+    /// accounting for `anchorPoint` (which defaults to `(0, 0)` on layer-backed AppKit `NSView`s).
+    public static func centeredScaleTransform(scale: CGFloat,
+                                              around centre: CGPoint,
+                                              boundsSize: CGSize = .zero,
+                                              anchorPoint: CGPoint = .zero) -> CATransform3D {
+        let pivot = CGPoint(x: centre.x - anchorPoint.x * boundsSize.width,
+                            y: centre.y - anchorPoint.y * boundsSize.height)
+        let affine = CGAffineTransform(
+            a: scale, b: 0,
+            c: 0, d: scale,
+            tx: (1 - scale) * pivot.x,
+            ty: (1 - scale) * pivot.y
+        )
+        return CATransform3DMakeAffineTransform(affine)
+    }
+
+    /// Extracts the uniform scale factor from a `CATransform3D` produced by `centeredScaleTransform`.
+    public static func transformScale(of transform: CATransform3D) -> CGFloat {
+        let scale = transform.m11
+        return scale.isFinite && scale > 0 ? scale : 1.0
     }
 
     public static func highlightDuration(reduceMotion: Bool) -> TimeInterval {
@@ -185,5 +251,69 @@ public struct RingLaunchState: Sendable, Equatable {
         guard phase == .exiting, generation == self.generation else { return .ignored }
         phase = .hidden
         return .settled
+    }
+}
+
+public enum RingLaunchPreviewPhase: String, Sendable, Equatable {
+    case idle
+    case entering
+    case holding
+    case exiting
+}
+
+/// Generation-guarded state machine for the Settings "Preview Animation" cycle:
+/// `idle -> entering -> holding -> exiting -> idle`.
+public struct RingLaunchPreviewState: Sendable, Equatable {
+    public enum StartOutcome: Sendable, Equatable {
+        case immediateReset
+        case playEntrance(generation: Int)
+    }
+
+    public enum StepOutcome: Sendable, Equatable {
+        case ignored
+        case advance(generation: Int)
+    }
+
+    public private(set) var phase: RingLaunchPreviewPhase = .idle
+    public private(set) var generation: Int = 0
+
+    public init() {}
+
+    public var isAnimating: Bool {
+        phase != .idle
+    }
+
+    public mutating func start(spec: RingLaunchAnimationSpec) -> StartOutcome {
+        generation += 1
+        if spec.entranceDuration <= 0 {
+            phase = .idle
+            return .immediateReset
+        }
+        phase = .entering
+        return .playEntrance(generation: generation)
+    }
+
+    public mutating func entranceFinished(generation: Int) -> StepOutcome {
+        guard phase == .entering, generation == self.generation else { return .ignored }
+        phase = .holding
+        return .advance(generation: generation)
+    }
+
+    public mutating func holdFinished(generation: Int) -> StepOutcome {
+        guard phase == .holding, generation == self.generation else { return .ignored }
+        phase = .exiting
+        return .advance(generation: generation)
+    }
+
+    public mutating func exitFinished(generation: Int) -> StepOutcome {
+        guard phase == .exiting, generation == self.generation else { return .ignored }
+        phase = .idle
+        return .advance(generation: generation)
+    }
+
+    public mutating func cancel() {
+        guard phase != .idle else { return }
+        generation += 1
+        phase = .idle
     }
 }

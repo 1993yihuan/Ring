@@ -40,6 +40,13 @@ struct SettingsView: View {
     let activeTrigger: TriggerBinding
     let triggerHint: String
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var toastMessage: String?
+    @State private var showToast: Bool = false
+    @State private var toastDismissWorkItem: DispatchWorkItem?
+
+    private var isToastVisible: Bool {
+        showToast && toastMessage != nil
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -48,7 +55,32 @@ struct SettingsView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HTMLSpecs.windowBackground)
+        .overlay(alignment: .bottom) {
+            // 固定在滚动视口底部安全区上方，确保 880×600 与 800×560 最小窗口下均完整可见且不遮挡圆环中心
+            if showToast, let toast = toastMessage {
+                Text(toast)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(.white)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.9)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 5)
+                    .background(
+                        Capsule()
+                            .fill(Color(red: 24/255, green: 24/255, blue: 27/255).opacity(0.92))
+                            .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 2)
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+                    .transition(.opacity)
+                    .allowsHitTesting(false)
+            }
+        }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: model.visibleSlotCount)
+        .onDisappear {
+            toastDismissWorkItem?.cancel()
+            toastDismissWorkItem = nil
+        }
         .sheet(item: $model.activePickerTarget) { target in
             QuickAppPickerView(
                 target: target,
@@ -69,31 +101,59 @@ struct SettingsView: View {
 
     private var page: some View {
         VStack(spacing: 0) {
-            RingMainCard(model: model, activeTrigger: activeTrigger, triggerHint: triggerHint)
+            RingMainCard(model: model,
+                         activeTrigger: activeTrigger,
+                         triggerHint: triggerHint,
+                         isToastVisible: isToastVisible,
+                         onShowToast: presentToast)
                 .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 24)
-        .padding(.vertical, 24)
+        .padding(.vertical, 16)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func presentToast(_ message: String) {
+        toastDismissWorkItem?.cancel()
+        toastMessage = message
+        showToast = true
+        let workItem = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.18)) { showToast = false }
+        }
+        toastDismissWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: workItem)
     }
 }
 
 // MARK: - 主设置内容卡（对齐 HTML view-ring）
 
+final class RingPreviewAnimationBridge: ObservableObject {
+    weak var hostView: RingPreviewHostView?
+
+    func play(entranceMilliseconds: Int, reduceMotion: Bool) {
+        hostView?.playPreviewAnimation(entranceMilliseconds: entranceMilliseconds,
+                                       reduceMotion: reduceMotion)
+    }
+
+    func cancelAndReset() {
+        hostView?.cancelPreviewAnimation()
+    }
+}
+
 private struct RingMainCard: View {
     @ObservedObject var model: SettingsModel
     let activeTrigger: TriggerBinding
     let triggerHint: String
+    let isToastVisible: Bool
+    let onShowToast: (String) -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var durationFieldFocused: Bool
     @State private var selectedSlotIndex: Int? = nil
     @State private var durationDraft: Double = Double(LauncherConfiguration.defaultEntranceDurationMilliseconds)
-    @State private var previewScale: CGFloat = 1.0
-    @State private var previewOpacity: Double = 1.0
-    @State private var toastMessage: String?
-    @State private var showToast: Bool = false
+    @StateObject private var previewBridge = RingPreviewAnimationBridge()
     @State private var isPreviewAnimating: Bool = false
-    @State private var previewGeneration: Int = 0
     @State private var clearEnlargementTrigger: UUID = UUID()
+    @State private var suppressNextDurationCancel: Bool = false
 
     private var filledCount: Int {
         model.visibleSlots.filter { $0.app != nil }.count
@@ -105,6 +165,10 @@ private struct RingMainCard: View {
         case .doubleTap(.option): return "双击 ⌥"
         case .combination(let combination): return combination.displayText
         }
+    }
+
+    private var previewButtonHelp: String {
+        "按当前展开时长预览轻盈开合动画"
     }
 
     var body: some View {
@@ -121,6 +185,19 @@ private struct RingMainCard: View {
         }
         .onAppear {
             durationDraft = Double(model.entranceDurationMilliseconds)
+        }
+        .onChange(of: model.entranceDurationMilliseconds) { _ in
+            if suppressNextDurationCancel {
+                suppressNextDurationCancel = false
+            } else {
+                previewBridge.cancelAndReset()
+            }
+        }
+        .onChange(of: model.visibleSlotCount) { _ in
+            previewBridge.cancelAndReset()
+        }
+        .onDisappear {
+            previewBridge.cancelAndReset()
         }
     }
 
@@ -172,144 +249,151 @@ private struct RingMainCard: View {
                 .shadow(color: Color.black.opacity(0.03), radius: 1, x: 0, y: 1)
             }
             .buttonStyle(.plain)
-            .help("按当前展开时长播放圆环展开缩放动画")
+            .help(previewButtonHelp)
         }
         .frame(height: 28)
-        .padding(.bottom, 16)
+        .padding(.bottom, 12)
     }
 
     private var controls: some View {
-        HStack(alignment: .center, spacing: 0) {
-            // 左列：可见位置数（占 50% 对等宽度）
-            HStack(alignment: .center, spacing: 12.5) {
-                Text("可见位置数")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(Color.black.opacity(0.80))
-                    .lineLimit(1)
-
-                HStack(spacing: 0) {
-                    ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
-                        let isSelected = count == model.visibleSlotCount
-                        Button(action: {
-                            model.setVisibleSlotCount(count)
-                            sanitizeSelection()
-                        }) {
-                            Text("\(count)")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(isSelected ? .white : Color.black.opacity(0.65))
-                                .frame(width: 28, height: 24)
-                                .background(
-                                    Group {
-                                        if isSelected {
-                                            RoundedRectangle(cornerRadius: 6, style: .circular)
-                                                .fill(HTMLSpecs.accentBlue)
-                                        } else {
-                                            Color.clear
-                                        }
-                                    }
-                                )
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                .padding(2)
-                .frame(width: 174, height: 30)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.black.opacity(0.06))
-                )
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .strokeBorder(Color.black.opacity(0.04), lineWidth: 1)
-                )
-
-                Spacer(minLength: 0)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.trailing, 16)
-
-            // 中间垂直分割线（对齐 HTML lg:border-r border-black/[0.06]）
-            Rectangle()
-                .fill(Color.black.opacity(0.06))
-                .frame(width: 1, height: 32)
-
-            // 右列：展开时长（占 50% 对等宽度，滑块 + 紧凑输入字段内嵌 ms）
-            HStack(alignment: .center, spacing: 8) {
-                HStack(spacing: 4) {
-                    Text("展开时长")
+        VStack(spacing: 0) {
+            HStack(alignment: .center, spacing: 0) {
+                // 左列：可见位置数（占 50% 对等宽度）
+                HStack(alignment: .center, spacing: 12.5) {
+                    Text("可见位置数")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color.black.opacity(0.80))
                         .lineLimit(1)
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.07))
-                            .frame(width: 16, height: 16)
-                        Text("?")
-                            .font(.system(size: 10, weight: .semibold))
-                            .foregroundColor(Color.black.opacity(0.55))
-                    }
-                    .help("0 表示立即显示（范围 0–2000 毫秒）")
-                }
 
-                Spacer(minLength: 0)
-
-                HStack(spacing: 10) {
-                    NativeCleanSlider(value: Binding(get: { durationDraft },
-                                                    set: { durationDraft = $0 }),
-                                     inRange: 0...2000,
-                                     step: 50,
-                                     onEditingChanged: { editing in
-                                         if !editing {
-                                             let intVal = Int(durationDraft)
-                                             model.updateEntranceDurationText(String(intVal))
-                                             model.commitEntranceDuration()
-                                         }
-                                     })
-                        .frame(minWidth: 60, maxWidth: 125)
-
-                    // 整个内嵌字段外框宽严格固定 70pt，ms 在右侧边框内
                     HStack(spacing: 0) {
-                        TextField("200", text: Binding(get: { model.entranceDurationText },
-                                                       set: { text in
-                                                           model.updateEntranceDurationText(text)
-                                                           if let v = Double(text), v >= 0, v <= 2000 {
-                                                               durationDraft = v
-                                                           }
-                                                       }))
-                            .textFieldStyle(.plain)
-                            .font(.system(size: 12, weight: .medium))
-                            .multilineTextAlignment(.trailing)
-                            .frame(maxWidth: .infinity)
-                            .focused($durationFieldFocused)
-                            .onSubmit {
-                                model.commitEntranceDuration()
-                                durationDraft = Double(model.entranceDurationMilliseconds)
+                        ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
+                            let isSelected = count == model.visibleSlotCount
+                            Button(action: {
+                                model.setVisibleSlotCount(count)
+                                sanitizeSelection()
+                            }) {
+                                Text("\(count)")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(isSelected ? .white : Color.black.opacity(0.65))
+                                    .frame(width: 28, height: 24)
+                                    .background(
+                                        Group {
+                                            if isSelected {
+                                                RoundedRectangle(cornerRadius: 6, style: .circular)
+                                                    .fill(HTMLSpecs.accentBlue)
+                                            } else {
+                                                Color.clear
+                                            }
+                                        }
+                                    )
                             }
-                        Text("ms")
-                            .font(.system(size: 11))
-                            .foregroundColor(Color.black.opacity(0.45))
-                            .padding(.leading, 3)
+                            .buttonStyle(.plain)
+                        }
                     }
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 3)
-                    .frame(width: 70, height: 26)
+                    .padding(2)
+                    .frame(width: 174, height: 30)
                     .background(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .fill(Color.white)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(Color.black.opacity(0.06))
                     )
                     .overlay(
-                        RoundedRectangle(cornerRadius: 6, style: .continuous)
-                            .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.black.opacity(0.04), lineWidth: 1)
                     )
+
+                    Spacer(minLength: 0)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 16)
+
+                // 中间垂直分割线（对齐 HTML lg:border-r border-black/[0.06]）
+                Rectangle()
+                    .fill(Color.black.opacity(0.06))
+                    .frame(width: 1, height: 32)
+
+                // 右列：展开时长（占 50% 对等宽度，滑块 + 紧凑输入字段内嵌 ms）
+                HStack(alignment: .center, spacing: 8) {
+                    HStack(spacing: 4) {
+                        Text("展开时长")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(Color.black.opacity(0.80))
+                            .lineLimit(1)
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.07))
+                                .frame(width: 16, height: 16)
+                            Text("?")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundColor(Color.black.opacity(0.55))
+                        }
+                        .help("0 表示立即显示（范围 0–2000 毫秒）")
+                    }
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 10) {
+                        NativeCleanSlider(value: Binding(get: { durationDraft },
+                                                        set: { durationDraft = $0 }),
+                                         inRange: 0...2000,
+                                         step: 50,
+                                         onEditingChanged: { editing in
+                                             if !editing {
+                                                 let intVal = Int(durationDraft)
+                                                 model.updateEntranceDurationText(String(intVal))
+                                                 model.commitEntranceDuration()
+                                             }
+                                         })
+                            .frame(minWidth: 60, maxWidth: 125)
+
+                        // 整个内嵌字段外框宽严格固定 70pt，ms 在右侧边框内
+                        HStack(spacing: 0) {
+                            TextField("200", text: Binding(get: { model.entranceDurationText },
+                                                           set: { text in
+                                                               model.updateEntranceDurationText(text)
+                                                               if let v = Double(text), v >= 0, v <= 2000 {
+                                                                   durationDraft = v
+                                                               }
+                                                           }))
+                                .textFieldStyle(.plain)
+                                .font(.system(size: 12, weight: .medium))
+                                .multilineTextAlignment(.trailing)
+                                .frame(maxWidth: .infinity)
+                                .focused($durationFieldFocused)
+                                .onSubmit {
+                                    model.commitEntranceDuration()
+                                    durationDraft = Double(model.entranceDurationMilliseconds)
+                                }
+                                .onChange(of: durationFieldFocused) { focused in
+                                    if !focused {
+                                        model.commitEntranceDuration()
+                                        durationDraft = Double(model.entranceDurationMilliseconds)
+                                    }
+                                }
+                            Text("ms")
+                                .font(.system(size: 11))
+                                .foregroundColor(Color.black.opacity(0.45))
+                                .padding(.leading, 3)
+                        }
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 3)
+                        .frame(width: 70, height: 26)
+                        .background(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(Color.white)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .strokeBorder(Color.black.opacity(0.12), lineWidth: 1)
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
+                .padding(.leading, 16)
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 16)
+            .padding(.horizontal, 16)
+            .frame(height: 50)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
         .frame(maxWidth: .infinity)
-        .frame(height: HTMLSpecs.cardHeight)
         .background(
             RoundedRectangle(cornerRadius: HTMLSpecs.cardCorner, style: .continuous)
                 .fill(HTMLSpecs.cardBackground)
@@ -319,70 +403,55 @@ private struct RingMainCard: View {
                 .strokeBorder(HTMLSpecs.cardBorder, lineWidth: 1)
         )
         .shadow(color: HTMLSpecs.cardShadowColor, radius: 1, x: 0, y: 1)
-        .padding(.bottom, 20)
+        .padding(.bottom, 12)
     }
 
     private var preview: some View {
         VStack(spacing: 0) {
-            ZStack {
-                SlotRingPreview(slots: model.visibleSlots,
-                                selectedSlotIndex: $selectedSlotIndex,
-                                isPreviewAnimating: isPreviewAnimating,
-                                clearEnlargementTrigger: clearEnlargementTrigger,
-                                onEmptySlotClicked: { index, _ in
+            SlotRingPreview(slots: model.visibleSlots,
+                            selectedSlotIndex: $selectedSlotIndex,
+                            isPreviewAnimating: isPreviewAnimating,
+                            clearEnlargementTrigger: clearEnlargementTrigger,
+                            previewBridge: previewBridge,
+                            onPreviewAnimatingChanged: { animating in
+                                isPreviewAnimating = animating
+                            },
+                            onEmptySlotClicked: { index, _ in
+                                selectedSlotIndex = nil
+                                model.chooseApp(at: index)
+                            },
+                            onEditSlotClicked: { index, _ in
+                                model.chooseApp(at: index)
+                            },
+                            onDeleteSlotClicked: { index, _ in
+                                model.removeApp(at: index)
+                                if selectedSlotIndex == index {
                                     selectedSlotIndex = nil
-                                    model.chooseApp(at: index)
-                                },
-                                onEditSlotClicked: { index, _ in
-                                    model.chooseApp(at: index)
-                                },
-                                onDeleteSlotClicked: { index, _ in
-                                    model.removeApp(at: index)
-                                    if selectedSlotIndex == index {
-                                        selectedSlotIndex = nil
+                                }
+                                sanitizeSelection()
+                            },
+                            onSwapSlots: { source, target in
+                                model.swapApps(at: source, and: target)
+                                if let current = selectedSlotIndex {
+                                    if current == source {
+                                        selectedSlotIndex = target
+                                    } else if current == target {
+                                        selectedSlotIndex = source
                                     }
-                                    sanitizeSelection()
-                                },
-                                onSwapSlots: { source, target in
-                                    model.swapApps(at: source, and: target)
-                                    if let current = selectedSlotIndex {
-                                        if current == source {
-                                            selectedSlotIndex = target
-                                        } else if current == target {
-                                            selectedSlotIndex = source
-                                        }
-                                    }
-                                    sanitizeSelection()
-                                })
-                    .scaleEffect(previewScale)
-                    .opacity(previewOpacity)
-                    .onChange(of: model.visibleSlots) { _ in
-                        sanitizeSelection()
-                    }
-                    .onChange(of: model.visibleSlotCount) { _ in
-                        sanitizeSelection()
-                    }
-
-                if showToast, let toast = toastMessage {
-                    Text(toast)
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 7)
-                        .background(
-                            Capsule()
-                                .fill(Color(red: 24/255, green: 24/255, blue: 27/255).opacity(0.92))
-                                .shadow(color: Color.black.opacity(0.15), radius: 6, x: 0, y: 2)
-                        )
-                        .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                        .zIndex(10)
+                                }
+                                sanitizeSelection()
+                            })
+                .onChange(of: model.visibleSlots) { _ in
+                    sanitizeSelection()
                 }
-            }
-            .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
-            .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 12)
+                .onChange(of: model.visibleSlotCount) { _ in
+                    sanitizeSelection()
+                }
+                .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 4)
 
-            // 4. 极简快捷键提示行（短键帽 + help 完整气泡）
+            // 4. 极简快捷键提示行（短键帽 + help 完整气泡；视口底部浮层提示显示时淡出避免重叠）
             HStack(spacing: 12) {
                 Text("拖拽重排")
                 Text("·").opacity(0.4)
@@ -405,8 +474,9 @@ private struct RingMainCard: View {
             .font(.system(size: 11.5))
             .foregroundColor(HTMLSpecs.textSecondary)
             .lineLimit(1)
+            .opacity(isToastVisible ? 0 : 1)
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 20)
+            .padding(.top, 12)
         }
         .frame(maxWidth: .infinity)
     }
@@ -421,49 +491,31 @@ private struct RingMainCard: View {
     }
 
     private func playRingAnimation() {
-        // 点「预览动画」立即无动画清掉悬停放大（含 0ms 与 >0ms 路径），播放期间严格抑制悬停放大，结束后不自动跳变
-        previewGeneration += 1
-        let gen = previewGeneration
-        isPreviewAnimating = true
+        if model.entranceDurationText != String(model.entranceDurationMilliseconds) {
+            let previousMs = model.entranceDurationMilliseconds
+            model.commitEntranceDuration()
+            durationDraft = Double(model.entranceDurationMilliseconds)
+            if model.entranceDurationMilliseconds != previousMs {
+                suppressNextDurationCancel = true
+            }
+        }
+
+        // 点「预览动画」立即无动画清掉悬停放大（含 0ms / 减弱动态与 >0ms 路径），播放期间严格抑制悬停放大，结束后不自动跳变
         clearEnlargementTrigger = UUID()
 
         let durationMs = model.entranceDurationMilliseconds
+        let effectiveReduceMotion = reduceMotion || NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+
         if durationMs == 0 {
-            toastMessage = "展开时长为 0 ms（立即显示）"
-            withAnimation(.easeInOut(duration: 0.15)) { showToast = true }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-                withAnimation(.easeInOut(duration: 0.2)) { showToast = false }
-            }
-            previewScale = 1.0
-            previewOpacity = 1.0
-            DispatchQueue.main.async {
-                guard previewGeneration == gen else { return }
-                isPreviewAnimating = false
-            }
-            return
+            onShowToast("展开时长为 0 ms（立即显示）")
+        } else if effectiveReduceMotion {
+            onShowToast("已开启「减弱动态效果」（立即显示）")
+        } else {
+            onShowToast("正在预览「轻盈开合」（\(durationMs) ms）")
         }
 
-        toastMessage = "已按 \(durationMs) ms 播放展开动画"
-        withAnimation(.easeInOut(duration: 0.15)) { showToast = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) {
-            withAnimation(.easeInOut(duration: 0.2)) { showToast = false }
-        }
-
-        withAnimation(.none) {
-            previewScale = 0.45
-            previewOpacity = 0.0
-        }
-        let seconds = Double(durationMs) / 1000.0
-        DispatchQueue.main.async {
-            withAnimation(.timingCurve(0.22, 1, 0.36, 1, duration: seconds)) {
-                previewScale = 1.0
-                previewOpacity = 1.0
-            }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) {
-            guard previewGeneration == gen else { return }
-            isPreviewAnimating = false
-        }
+        previewBridge.play(entranceMilliseconds: durationMs,
+                           reduceMotion: effectiveReduceMotion)
     }
 }
 
@@ -637,6 +689,8 @@ struct SlotRingPreview: View {
     @Binding var selectedSlotIndex: Int?
     var isPreviewAnimating: Bool = false
     var clearEnlargementTrigger: UUID?
+    fileprivate var previewBridge: RingPreviewAnimationBridge? = nil
+    var onPreviewAnimatingChanged: ((Bool) -> Void)?
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
@@ -646,6 +700,8 @@ struct SlotRingPreview: View {
          selectedSlotIndex: Binding<Int?>? = nil,
          isPreviewAnimating: Bool = false,
          clearEnlargementTrigger: UUID? = nil,
+         previewBridge: RingPreviewAnimationBridge? = nil,
+         onPreviewAnimatingChanged: ((Bool) -> Void)? = nil,
          onEmptySlotClicked: ((Int, UUID) -> Void)? = nil,
          onEditSlotClicked: ((Int, UUID) -> Void)? = nil,
          onDeleteSlotClicked: ((Int, UUID) -> Void)? = nil,
@@ -654,6 +710,8 @@ struct SlotRingPreview: View {
         self._selectedSlotIndex = selectedSlotIndex ?? .constant(nil)
         self.isPreviewAnimating = isPreviewAnimating
         self.clearEnlargementTrigger = clearEnlargementTrigger
+        self.previewBridge = previewBridge
+        self.onPreviewAnimatingChanged = onPreviewAnimatingChanged
         self.onEmptySlotClicked = onEmptySlotClicked
         self.onEditSlotClicked = onEditSlotClicked
         self.onDeleteSlotClicked = onDeleteSlotClicked
@@ -675,14 +733,18 @@ struct SlotRingPreview: View {
                                          selectedSlotIndex: $selectedSlotIndex,
                                          isPreviewAnimating: isPreviewAnimating,
                                          clearEnlargementTrigger: clearEnlargementTrigger,
+                                         previewBridge: previewBridge,
+                                         onPreviewAnimatingChanged: onPreviewAnimatingChanged,
                                          onEmptySlotClicked: onEmptySlotClicked,
                                          onEditSlotClicked: onEditSlotClicked,
                                          onDeleteSlotClicked: onDeleteSlotClicked,
                                          onSwapSlots: onSwapSlots)
                 .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
 
-            // 中心 Hub 控件与可访问性按钮（仅当选中有效已填槽时显示详情；未选中或失效时保持完全空白）
+            // 中心 Hub 控件与可访问性按钮（仅当选中有效已填槽且未处于动画预览中时显示详情）
             centerHub
+                .opacity(isPreviewAnimating ? 0 : 1)
+                .allowsHitTesting(!isPreviewAnimating)
         }
         .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
     }
@@ -754,6 +816,8 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
     @Binding var selectedSlotIndex: Int?
     var isPreviewAnimating: Bool
     var clearEnlargementTrigger: UUID?
+    var previewBridge: RingPreviewAnimationBridge?
+    var onPreviewAnimatingChanged: ((Bool) -> Void)?
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
@@ -769,6 +833,8 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> RingPreviewHostView {
         let view = RingPreviewHostView()
+        previewBridge?.hostView = view
+        view.onPreviewAnimatingChanged = onPreviewAnimatingChanged
         view.onEmptySlotClicked = onEmptySlotClicked
         view.onEditSlotClicked = onEditSlotClicked
         view.onDeleteSlotClicked = onDeleteSlotClicked
@@ -784,6 +850,8 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: RingPreviewHostView, context: Context) {
+        previewBridge?.hostView = nsView
+        nsView.onPreviewAnimatingChanged = onPreviewAnimatingChanged
         nsView.onEmptySlotClicked = onEmptySlotClicked
         nsView.onEditSlotClicked = onEditSlotClicked
         nsView.onDeleteSlotClicked = onDeleteSlotClicked
@@ -825,9 +893,16 @@ final class RingPreviewHostView: NSView {
     private(set) var hoveredEnlargedSlotID: UUID?
     private(set) var hoveredEnlargedApp: AppReference?
     private(set) var isPreviewAnimating: Bool = false
+    private var previewState = RingLaunchPreviewState()
+    private var pendingHoldWorkItem: DispatchWorkItem?
+    private var accessibilityObserver: NSObjectProtocol?
     private var trackingArea: NSTrackingArea?
     private var isHoldingSlotCursor: Bool = false
     private var lastKnownMouseLocalPoint: NSPoint?
+
+    private var lastRenderedSlots: [Slot]?
+    private var lastRenderedBoundsSize: CGSize?
+    private var lastRenderedScale: CGFloat?
 
     // 拖拽状态（4pt 阈值与内部槽位身份隔离）
     private var dragCandidateIndex: Int?
@@ -837,6 +912,7 @@ final class RingPreviewHostView: NSView {
     private var lastClickedSlotIndex: Int?
     private var lastClickTime: TimeInterval = 0
 
+    var onPreviewAnimatingChanged: ((Bool) -> Void)?
     var onEmptySlotClicked: ((Int, UUID) -> Void)?
     var onEditSlotClicked: ((Int, UUID) -> Void)?
     var onDeleteSlotClicked: ((Int, UUID) -> Void)?
@@ -851,6 +927,13 @@ final class RingPreviewHostView: NSView {
     required init?(coder: NSCoder) {
         super.init(coder: coder)
         setupLayers()
+    }
+
+    deinit {
+        pendingHoldWorkItem?.cancel()
+        if let accessibilityObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(accessibilityObserver)
+        }
     }
 
     override var isFlipped: Bool { true }
@@ -872,6 +955,84 @@ final class RingPreviewHostView: NSView {
         if animating {
             clearHoverEnlargement(animated: false)
         }
+    }
+
+    func playPreviewAnimation(entranceMilliseconds: Int,
+                              reduceMotion: Bool) {
+        pendingHoldWorkItem?.cancel()
+        pendingHoldWorkItem = nil
+        clearHoverEnlargement(animated: false)
+
+        let spec = RingLaunchAnimation.spec(
+            entranceMilliseconds: entranceMilliseconds,
+            reduceMotion: reduceMotion)
+
+        switch previewState.start(spec: spec) {
+        case .immediateReset:
+            resetPreviewLayer()
+            setPreviewAnimating(false)
+            onPreviewAnimatingChanged?(false)
+        case .playEntrance(let generation):
+            setPreviewAnimating(true)
+            onPreviewAnimatingChanged?(true)
+            resetPreviewLayer()
+            playPreviewEntrance(spec: spec, generation: generation)
+        }
+    }
+
+    func cancelPreviewAnimation() {
+        pendingHoldWorkItem?.cancel()
+        pendingHoldWorkItem = nil
+        previewState.cancel()
+        resetPreviewLayer()
+        if isPreviewAnimating {
+            setPreviewAnimating(false)
+            onPreviewAnimatingChanged?(false)
+            reconcileCursorAfterLayoutOrSlotsChange()
+        }
+    }
+
+    private func resetPreviewLayer() {
+        guard let hostLayer = layer else { return }
+        RingLaunchLayerDriver.resetLayer(hostLayer)
+    }
+
+    private func playPreviewEntrance(spec: RingLaunchAnimationSpec, generation: Int) {
+        guard let hostLayer = layer else {
+            cancelPreviewAnimation()
+            return
+        }
+        let centre = CGPoint(x: bounds.midX, y: bounds.midY)
+        RingLaunchLayerDriver.playGentleEntrance(on: hostLayer, centre: centre, spec: spec) { [weak self] in
+            self?.previewEntranceFinished(spec: spec, generation: generation)
+        }
+    }
+
+    private func previewEntranceFinished(spec: RingLaunchAnimationSpec, generation: Int) {
+        guard previewState.entranceFinished(generation: generation) == .advance(generation: generation) else { return }
+        let workItem = DispatchWorkItem { [weak self] in
+            self?.previewHoldFinished(spec: spec, generation: generation)
+        }
+        pendingHoldWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + spec.previewHoldDuration, execute: workItem)
+    }
+
+    private func previewHoldFinished(spec: RingLaunchAnimationSpec, generation: Int) {
+        pendingHoldWorkItem = nil
+        guard previewState.holdFinished(generation: generation) == .advance(generation: generation),
+              let hostLayer = layer else { return }
+        let centre = CGPoint(x: bounds.midX, y: bounds.midY)
+        RingLaunchLayerDriver.playGentleExit(on: hostLayer, centre: centre, spec: spec) { [weak self] in
+            self?.previewExitFinished(generation: generation)
+        }
+    }
+
+    private func previewExitFinished(generation: Int) {
+        guard previewState.exitFinished(generation: generation) == .advance(generation: generation) else { return }
+        resetPreviewLayer()
+        setPreviewAnimating(false)
+        onPreviewAnimatingChanged?(false)
+        reconcileCursorAfterLayoutOrSlotsChange()
     }
 
     func clearHoverEnlargement(animated: Bool = true) {
@@ -928,12 +1089,12 @@ final class RingPreviewHostView: NSView {
 
         let scale = window?.backingScaleFactor ?? 2.0
 
-        // 0. 外环底盘层（不透明 #F6F6F8 阻隔阴影透入盘面，外阴影向外扩散）
+        // 0. 外环底盘层（不透明 #F6F6F8 阻隔阴影透入盘面，外阴影向下方扩散，避免 isFlipped 下向上溢入上方卡片）
         ringBackdropLayer.fillColor = HTMLSpecs.windowBackgroundNS.cgColor
         ringBackdropLayer.shadowColor = NSColor(red: 15/255, green: 23/255, blue: 42/255, alpha: 0.12).cgColor
         ringBackdropLayer.shadowOpacity = 1.0
         ringBackdropLayer.shadowRadius = 18.0
-        ringBackdropLayer.shadowOffset = CGSize(width: 0, height: -14.0)
+        ringBackdropLayer.shadowOffset = RingPreviewLayoutHelper.downwardShadowOffset(verticalDistance: 14.0, isFlipped: isFlipped)
         layer?.addSublayer(ringBackdropLayer)
 
         // 1. 外环渐变图层（145°，左上 #FFFFFF 85% 到右下 #EBEDF2 72%）
@@ -1022,10 +1183,22 @@ final class RingPreviewHostView: NSView {
         dragGhostLayer.shadowOffset = CGSize(width: 0, height: -4)
         dragGhostLayer.isHidden = true
         layer?.addSublayer(dragGhostLayer)
+
+        if accessibilityObserver == nil {
+            accessibilityObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard NSWorkspace.shared.accessibilityDisplayShouldReduceMotion else { return }
+                self?.cancelPreviewAnimation()
+            }
+        }
     }
 
     override func viewWillMove(toWindow newWindow: NSWindow?) {
         if newWindow == nil {
+            cancelPreviewAnimation()
             clearHoverEnlargement(animated: false)
             lastKnownMouseLocalPoint = nil
             if isDragging {
@@ -1111,7 +1284,17 @@ final class RingPreviewHostView: NSView {
         if let focused = focusedSlotIndex, !slots.indices.contains(focused) {
             focusedSlotIndex = nil
         }
-        needsLayout = true
+        let scale = window?.backingScaleFactor ?? 2.0
+        let needsRebuild = RingPreviewLayoutHelper.shouldRebuildSlotLayers(
+            previousSlots: lastRenderedSlots,
+            currentSlots: slots,
+            previousSize: lastRenderedBoundsSize,
+            currentSize: bounds.size,
+            previousScale: lastRenderedScale,
+            currentScale: scale)
+        if needsRebuild {
+            needsLayout = true
+        }
         if slotsChanged {
             window?.invalidateCursorRects(for: self)
             reconcileCursorAfterLayoutOrSlotsChange()
@@ -1178,7 +1361,20 @@ final class RingPreviewHostView: NSView {
         centerHubInnerShadowLayer.path = innerShadowPath
         centerHubInnerShadowLayer.frame = hubBounds
 
-        layoutSlotLayers(cx: cx, cy: cy, count: count)
+        let scale = window?.backingScaleFactor ?? 2.0
+        let needsRebuild = RingPreviewLayoutHelper.shouldRebuildSlotLayers(
+            previousSlots: lastRenderedSlots,
+            currentSlots: slots,
+            previousSize: lastRenderedBoundsSize,
+            currentSize: bounds.size,
+            previousScale: lastRenderedScale,
+            currentScale: scale)
+        if needsRebuild {
+            layoutSlotLayers(cx: cx, cy: cy, count: count)
+            lastRenderedSlots = slots
+            lastRenderedBoundsSize = bounds.size
+            lastRenderedScale = scale
+        }
         updateFocusAndHub()
 
         CATransaction.commit()

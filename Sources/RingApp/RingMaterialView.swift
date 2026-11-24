@@ -42,8 +42,6 @@ final class RingMaterialView: NSView {
     private var grainScale: CGFloat = 0
     private var lastSelectedSlot: Int?
     private var currentHighlightAngle: Double = 0
-    /// The exit fades the panel's shared layer, not this one: the icons are a sibling view.
-    private static let panelFadeKey = "ring.panel.exit"
     private static let highlightFadeKey = "ring.highlight.opacity"
     private static let highlightRotateKey = "ring.highlight.rotate"
 
@@ -217,80 +215,7 @@ final class RingMaterialView: NSView {
         layoutWash(animate: false)
     }
 
-    // MARK: - Launcher entrance and exit
-
-    /// The ring appears by being uncovered clockwise from 12 o'clock, straight from the
-    /// configured centre. This view is masked as one material, so the band, both hairlines,
-    /// both shadows and the highlight are uncovered by the same edge; its own ring-shaped
-    /// clip stays on the inner `material` layer, untouched. Nothing is scaled or faded.
-    func beginSweep(duration: TimeInterval, completion: @escaping () -> Void) {
-        guard let layer, let geometry else { completion(); return }
-        clearSweep()
-        let plate = geometry.plateRect
-        let centre = CGPoint(x: plate.midX, y: plate.midY)
-        let mask = RingSweepReveal.mask(centre: centre,
-                                        radius: hypot(bounds.width, bounds.height),
-                                        frame: bounds,
-                                        scale: window?.backingScaleFactor ?? 2)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.mask = mask
-        CATransaction.commit()
-        RingSweepReveal.animate(mask, duration: duration, completion: completion)
-    }
-
-    /// The finished picture is the original drawing: the reveal mask is removed rather than
-    /// left at full, so the last frame adds no seam at 12 o'clock.
-    func clearSweep() {
-        guard let layer, layer.mask != nil else { return }
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        layer.mask = nil
-        CATransaction.commit()
-    }
-
-    /// Keeps the sector the frame shows, so an interrupted entrance fades out with the part it
-    /// had uncovered instead of finishing first.
-    func freezeSweep() {
-        RingSweepReveal.freeze(layer?.mask)
-    }
-
-    /// Leaving fades the whole picture — plate, shadows and the icons beside it — from what
-    /// is on screen right now. `container` is the layer that holds both views, so the icons
-    /// cannot be cut off while the plate is still fading.
-    func playExit(in container: CALayer, duration: TimeInterval, completion: @escaping () -> Void) {
-        // An entrance may still be running. Its sector is frozen where the frame shows it, so
-        // leaving does not flash the rest of the ring in first.
-        freezeSweep()
-        let from = container.presentation()?.opacity ?? container.opacity
-        container.removeAnimation(forKey: Self.panelFadeKey)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        container.opacity = 0
-        guard duration > 0 else {
-            CATransaction.commit()
-            completion()
-            return
-        }
-        let fade = CABasicAnimation(keyPath: "opacity")
-        fade.fromValue = from
-        fade.toValue = 0
-        fade.duration = duration
-        fade.timingFunction = CAMediaTimingFunction(name: .easeOut)
-        CATransaction.setCompletionBlock(completion)
-        container.add(fade, forKey: Self.panelFadeKey)
-        CATransaction.commit()
-    }
-
-    /// The next round starts from a fully opaque picture: a fade the previous round left on
-    /// the panel cannot dim it, and its completion is ignored by the generation anyway.
-    func resetPanel(in container: CALayer) {
-        container.removeAnimation(forKey: Self.panelFadeKey)
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        container.opacity = 1
-        CATransaction.commit()
-    }
+    // MARK: - Highlight
 
     /// Reduce Motion takes effect at once: a highlight fade still running is dropped, and the
     /// wash stays at the value the model already holds.
