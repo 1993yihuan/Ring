@@ -28,7 +28,7 @@ private enum PickerTab: String, CaseIterable, Identifiable {
 }
 
 /// Unified 3-tab slot action picker ("应用" | "网址" | "快捷功能").
-/// Preserves the 380pt Spotlight-style light card aesthetic and full keyboard/IME support.
+/// Preserves the 520pt Spotlight-style light card aesthetic and full keyboard/IME support.
 struct QuickAppPickerView: View {
     let target: PickerTarget
     let scanner: QuickAppScanner
@@ -61,17 +61,23 @@ struct QuickAppPickerView: View {
     @State private var fileDisplayName: String = ""
     @State private var fileBookmarkData: Data?
     @State private var shortcutError: String?
+    @State private var isChooseFileHovered: Bool = false
+    @State private var isLockScreenHovered: Bool = false
 
     @FocusState private var isSearchFocused: Bool
     @FocusState private var isURLFieldFocused: Bool
 
-    static let panelSize = CGSize(width: 380, height: 420)
+    static let panelSize = CGSize(width: 520, height: 460)
 
-    private let columns = [
-        GridItem(.flexible(), spacing: 6),
-        GridItem(.flexible(), spacing: 6),
-        GridItem(.flexible(), spacing: 6)
-    ]
+    private static let gridColumnCount = 4
+    private static let gridColumnSpacing: CGFloat = 8
+    private static let footerHeight: CGFloat = 44
+    private static let footerHorizontalPadding: CGFloat = 16
+
+    private let columns = Array(
+        repeating: GridItem(.flexible(), spacing: gridColumnSpacing),
+        count: gridColumnCount
+    )
 
     init(target: PickerTarget,
          scanner: QuickAppScanner = QuickAppScanner(),
@@ -189,10 +195,10 @@ struct QuickAppPickerView: View {
                         selectedTab = tab
                     } label: {
                         Text(tab.title)
-                            .font(.system(size: 12, weight: isSelected ? .semibold : .medium))
+                            .font(.system(size: 12.5, weight: isSelected ? .semibold : .medium))
                             .foregroundStyle(isSelected ? HTMLSpecs.textColor : Color.black.opacity(0.55))
                             .frame(maxWidth: .infinity)
-                            .frame(height: 26)
+                            .frame(height: 28)
                             .background(
                                 Group {
                                     if isSelected {
@@ -230,8 +236,8 @@ struct QuickAppPickerView: View {
             .buttonStyle(.plain)
             .help("按 ESC 键取消")
         }
-        .padding(.horizontal, 12)
-        .frame(height: 44)
+        .padding(.horizontal, 16)
+        .frame(height: 48)
     }
 
     // MARK: - Tab 1: Apps
@@ -280,8 +286,8 @@ struct QuickAppPickerView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.horizontal, 12)
-        .frame(height: 36)
+        .padding(.horizontal, 16)
+        .frame(height: 40)
     }
 
     private var appsGrid: some View {
@@ -315,7 +321,7 @@ struct QuickAppPickerView: View {
             } else {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: true) {
-                        LazyVGrid(columns: columns, spacing: 6) {
+                        LazyVGrid(columns: columns, spacing: 8) {
                             ForEach(Array(filteredCandidates.enumerated()), id: \.element.id) { index, candidate in
                                 Button {
                                     removeMonitor()
@@ -335,15 +341,23 @@ struct QuickAppPickerView: View {
                                 .id(candidate.id)
                             }
                         }
-                        .padding(.leading, 10)
-                        .padding(.trailing, 16)
-                        .padding(.vertical, 10)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
                     }
                     .onChange(of: selectedIndex) { newIndex in
                         if filteredCandidates.indices.contains(newIndex) {
                             proxy.scrollTo(filteredCandidates[newIndex].id, anchor: .center)
                         }
                     }
+                }
+                .overlay(alignment: .bottom) {
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.0), Color.white.opacity(0.92)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 14)
+                    .allowsHitTesting(false)
                 }
             }
         }
@@ -380,11 +394,11 @@ struct QuickAppPickerView: View {
         .frame(maxWidth: .infinity)
         .background(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(isSelected ? Color.clear : hoverColor(for: candidate))
+                .fill(isSelected ? HTMLSpecs.accentBlue.opacity(0.07) : hoverColor(for: candidate))
         )
         .overlay(
             RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(isSelected ? HTMLSpecs.accentBlue.opacity(0.40) : Color.clear, lineWidth: 1)
+                .strokeBorder(isSelected ? HTMLSpecs.accentBlue.opacity(0.42) : Color.clear, lineWidth: 1)
                 .padding(-1)
         )
         .contentShape(Rectangle())
@@ -409,8 +423,8 @@ struct QuickAppPickerView: View {
             .foregroundStyle(HTMLSpecs.accentBlue)
             .help("从访达选择任意 .app 文件")
         }
-        .padding(.horizontal, 14)
-        .frame(height: 34)
+        .padding(.horizontal, Self.footerHorizontalPadding)
+        .frame(height: Self.footerHeight)
         .background(Color.black.opacity(0.015))
     }
 
@@ -453,10 +467,18 @@ struct QuickAppPickerView: View {
         return availableBrowserOptions.first(where: { $0.path == selectedBrowserPath })
     }
 
+    private var selectedBrowserDisplayTitle: String {
+        guard let browser = selectedBrowserReference else {
+            return "系统默认浏览器"
+        }
+        let exists = FileManager.default.fileExists(atPath: browser.path)
+        return exists ? browser.displayName : "\(browser.displayName)（未找到）"
+    }
+
     private var webURLTabContent: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 14) {
+                VStack(alignment: .leading, spacing: 16) {
                     // 1. URL Input
                     VStack(alignment: .leading, spacing: 6) {
                         Text("网址或应用链接")
@@ -507,7 +529,7 @@ struct QuickAppPickerView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.black.opacity(0.75))
 
-                        HStack(spacing: 12) {
+                        HStack(alignment: .center, spacing: 12) {
                             Image(nsImage: currentPreviewWebIcon)
                                 .resizable()
                                 .aspectRatio(contentMode: .fit)
@@ -570,20 +592,64 @@ struct QuickAppPickerView: View {
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Color.black.opacity(0.75))
 
-                        Picker("", selection: $selectedBrowserPath) {
-                            Text("系统默认浏览器").tag("")
+                        Menu {
+                            Button {
+                                selectedBrowserPath = ""
+                            } label: {
+                                if selectedBrowserPath.isEmpty {
+                                    Label("系统默认浏览器", systemImage: "checkmark")
+                                } else {
+                                    Text("系统默认浏览器")
+                                }
+                            }
+                            if !availableBrowserOptions.isEmpty {
+                                Divider()
+                            }
                             ForEach(availableBrowserOptions, id: \.path) { browser in
                                 let exists = FileManager.default.fileExists(atPath: browser.path)
-                                Text(exists ? browser.displayName : "\(browser.displayName)（未找到）")
-                                    .tag(browser.path)
+                                let title = exists ? browser.displayName : "\(browser.displayName)（未找到）"
+                                Button {
+                                    selectedBrowserPath = browser.path
+                                } label: {
+                                    if selectedBrowserPath == browser.path {
+                                        Label(title, systemImage: "checkmark")
+                                    } else {
+                                        Text(title)
+                                    }
+                                }
                             }
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text(selectedBrowserDisplayTitle)
+                                    .font(.system(size: 13))
+                                    .foregroundStyle(HTMLSpecs.textColor)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                Spacer()
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.system(size: 10.5, weight: .semibold))
+                                    .foregroundStyle(Color.black.opacity(0.45))
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 7)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .fill(Color.black.opacity(0.04))
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                    .strokeBorder(Color.black.opacity(0.10), lineWidth: 1)
+                            )
+                            .contentShape(Rectangle())
                         }
-                        .labelsHidden()
-                        .pickerStyle(.menu)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .menuStyle(.button)
+                        .menuIndicator(.hidden)
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity)
                     }
                 }
-                .padding(16)
+                .padding(20)
             }
 
             Rectangle()
@@ -605,8 +671,8 @@ struct QuickAppPickerView: View {
                 .controlSize(.regular)
                 .disabled(resolvedNormalizedURL == nil)
             }
-            .padding(.horizontal, 16)
-            .frame(height: 48)
+            .padding(.horizontal, Self.footerHorizontalPadding)
+            .frame(height: Self.footerHeight)
             .background(Color.black.opacity(0.015))
         }
     }
@@ -709,7 +775,7 @@ struct QuickAppPickerView: View {
     private var shortcutTabContent: some View {
         VStack(spacing: 0) {
             ScrollView(.vertical, showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
+                VStack(alignment: .leading, spacing: 18) {
                     // Section 1: File or Folder
                     VStack(alignment: .leading, spacing: 8) {
                         Text("打开文件或文件夹")
@@ -748,11 +814,21 @@ struct QuickAppPickerView: View {
 
                                 Spacer()
 
-                                Button(hasSelectedFile ? "重新选择…" : "选择…") {
+                                Button {
                                     chooseFileOrFolder()
+                                } label: {
+                                    Text(hasSelectedFile ? "重新选择…" : "选择…")
+                                        .font(.system(size: 11.5, weight: .medium))
+                                        .foregroundStyle(HTMLSpecs.accentBlue)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 4)
+                                        .background(
+                                            Capsule()
+                                                .fill(HTMLSpecs.accentBlue.opacity(isChooseFileHovered ? 0.16 : 0.10))
+                                        )
                                 }
-                                .buttonStyle(.bordered)
-                                .controlSize(.small)
+                                .buttonStyle(.plain)
+                                .onHover { isChooseFileHovered = $0 }
                             }
 
                             if hasSelectedFile {
@@ -792,7 +868,7 @@ struct QuickAppPickerView: View {
                                     .foregroundStyle(.red)
                             }
                         }
-                        .padding(12)
+                        .padding(14)
                         .background(
                             RoundedRectangle(cornerRadius: 12, style: .continuous)
                                 .fill(Color.black.opacity(0.035))
@@ -840,22 +916,32 @@ struct QuickAppPickerView: View {
                                             .fill(isLockScreenSelected ? HTMLSpecs.accentBlue : HTMLSpecs.accentBlue.opacity(0.10))
                                     )
                             }
-                            .padding(12)
+                            .padding(14)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .background(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .fill(Color.black.opacity(0.035))
+                                    .fill(
+                                        isLockScreenSelected
+                                            ? HTMLSpecs.accentBlue.opacity(isLockScreenHovered ? 0.08 : 0.05)
+                                            : Color.black.opacity(isLockScreenHovered ? 0.055 : 0.035)
+                                    )
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                    .strokeBorder(isLockScreenSelected ? HTMLSpecs.accentBlue.opacity(0.45) : Color.black.opacity(0.07), lineWidth: 1)
+                                    .strokeBorder(
+                                        isLockScreenSelected
+                                            ? HTMLSpecs.accentBlue.opacity(0.45)
+                                            : Color.black.opacity(isLockScreenHovered ? 0.13 : 0.07),
+                                        lineWidth: 1
+                                    )
                             )
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .onHover { isLockScreenHovered = $0 }
                     }
                 }
-                .padding(16)
+                .padding(20)
             }
 
             Rectangle()
@@ -874,8 +960,8 @@ struct QuickAppPickerView: View {
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Color.black.opacity(0.65))
             }
-            .padding(.horizontal, 14)
-            .frame(height: 36)
+            .padding(.horizontal, Self.footerHorizontalPadding)
+            .frame(height: Self.footerHeight)
             .background(Color.black.opacity(0.015))
         }
     }
@@ -1005,14 +1091,14 @@ struct QuickAppPickerView: View {
             if event.keyCode == 125 {
                 let count = filteredCandidates.count
                 if count > 0 {
-                    selectedIndex = min(selectedIndex + 3, count - 1)
+                    selectedIndex = min(selectedIndex + Self.gridColumnCount, count - 1)
                 }
                 return nil
             }
             if event.keyCode == 126 {
                 let count = filteredCandidates.count
                 if count > 0 {
-                    selectedIndex = max(selectedIndex - 3, 0)
+                    selectedIndex = max(selectedIndex - Self.gridColumnCount, 0)
                 }
                 return nil
             }

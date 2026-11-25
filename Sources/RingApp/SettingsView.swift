@@ -49,9 +49,15 @@ struct SettingsView: View {
     }
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
-            page
-                .frame(maxWidth: .infinity)
+        GeometryReader { viewport in
+            ScrollView(.vertical, showsIndicators: false) {
+                MinimumHeightContainerLayout(minHeight: viewport.size.height) {
+                    page
+                        .frame(maxWidth: .infinity)
+                }
+                .frame(maxWidth: .infinity, minHeight: viewport.size.height, alignment: .top)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(HTMLSpecs.windowBackground)
@@ -102,17 +108,14 @@ struct SettingsView: View {
     }
 
     private var page: some View {
-        VStack(spacing: 0) {
-            RingMainCard(model: model,
-                         activeTrigger: activeTrigger,
-                         triggerHint: triggerHint,
-                         isToastVisible: isToastVisible,
-                         onShowToast: presentToast)
-                .frame(maxWidth: .infinity)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 16)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        RingMainCard(model: model,
+                     activeTrigger: activeTrigger,
+                     triggerHint: triggerHint,
+                     isToastVisible: isToastVisible,
+                     onShowToast: presentToast)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private func presentToast(_ message: String) {
@@ -124,6 +127,27 @@ struct SettingsView: View {
         }
         toastDismissWorkItem = workItem
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: workItem)
+    }
+}
+
+/// Proposes at least `minHeight` to a single child inside a `ScrollView` so equal `Spacer`s expand
+/// when the viewport is taller than the child's intrinsic height, while falling back to scrolling on smaller screens.
+private struct MinimumHeightContainerLayout: Layout {
+    let minHeight: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        guard let child = subviews.first else {
+            return CGSize(width: proposal.width ?? 0, height: minHeight)
+        }
+        let natural = child.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
+        return CGSize(width: proposal.width ?? natural.width, height: max(natural.height, minHeight))
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let child = subviews.first else { return }
+        child.place(at: bounds.origin,
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
     }
 }
 
@@ -181,9 +205,11 @@ private struct RingMainCard: View {
                 Text(message)
                     .font(.system(size: 11))
                     .foregroundColor(.red)
-                    .padding(.bottom, 8)
+                    .padding(.top, 6)
             }
+            Spacer(minLength: 12)
             preview
+            Spacer(minLength: 12)
         }
         .onAppear {
             durationDraft = Double(model.entranceDurationMilliseconds)
@@ -260,12 +286,13 @@ private struct RingMainCard: View {
     private var controls: some View {
         VStack(spacing: 0) {
             HStack(alignment: .center, spacing: 0) {
-                // 左列：可见位置数（占 50% 对等宽度）
-                HStack(alignment: .center, spacing: 12.5) {
+                // 左列：按内容自然占宽并禁止标签截断，确保 800×560 下「可见位置数」完整显示
+                HStack(alignment: .center, spacing: 10) {
                     Text("可见位置数")
                         .font(.system(size: 13, weight: .medium))
                         .foregroundColor(Color.black.opacity(0.80))
                         .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
 
                     HStack(spacing: 0) {
                         ForEach(LauncherConfiguration.visibleSlotRange, id: \.self) { count in
@@ -302,24 +329,22 @@ private struct RingMainCard: View {
                         RoundedRectangle(cornerRadius: 8, style: .continuous)
                             .strokeBorder(Color.black.opacity(0.04), lineWidth: 1)
                     )
-
-                    Spacer(minLength: 0)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, 16)
+                .padding(.trailing, 14)
 
                 // 中间垂直分割线（对齐 HTML lg:border-r border-black/[0.06]）
                 Rectangle()
                     .fill(Color.black.opacity(0.06))
                     .frame(width: 1, height: 32)
 
-                // 右列：展开时长（占 50% 对等宽度，滑块 + 紧凑输入字段内嵌 ms）
+                // 右列：展开时长（弹性占用剩余宽度，滑块自适应伸缩）
                 HStack(alignment: .center, spacing: 8) {
                     HStack(spacing: 4) {
                         Text("展开时长")
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(Color.black.opacity(0.80))
                             .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                         ZStack {
                             Circle()
                                 .fill(Color.black.opacity(0.07))
@@ -331,7 +356,7 @@ private struct RingMainCard: View {
                         .help("0 表示立即显示（范围 0–2000 毫秒）")
                     }
 
-                    Spacer(minLength: 0)
+                    Spacer(minLength: 4)
 
                     HStack(spacing: 10) {
                         NativeCleanSlider(value: Binding(get: { durationDraft },
@@ -345,7 +370,7 @@ private struct RingMainCard: View {
                                                  model.commitEntranceDuration()
                                              }
                                          })
-                            .frame(minWidth: 60, maxWidth: 125)
+                            .frame(minWidth: 50, maxWidth: 140)
 
                         // 整个内嵌字段外框宽严格固定 70pt，ms 在右侧边框内
                         HStack(spacing: 0) {
@@ -390,7 +415,7 @@ private struct RingMainCard: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .trailing)
-                .padding(.leading, 16)
+                .padding(.leading, 14)
             }
             .padding(.horizontal, 16)
             .frame(height: 50)
@@ -405,11 +430,10 @@ private struct RingMainCard: View {
                 .strokeBorder(HTMLSpecs.cardBorder, lineWidth: 1)
         )
         .shadow(color: HTMLSpecs.cardShadowColor, radius: 1, x: 0, y: 1)
-        .padding(.bottom, 12)
     }
 
     private var preview: some View {
-        VStack(spacing: 0) {
+        VStack(spacing: 14) {
             SlotRingPreview(slots: model.visibleSlots,
                             iconProvider: model.iconProvider,
                             selectedSlotIndex: $selectedSlotIndex,
@@ -452,7 +476,6 @@ private struct RingMainCard: View {
                 }
                 .frame(width: HTMLSpecs.ringDiameter, height: HTMLSpecs.ringDiameter)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .padding(.top, 4)
 
             // 4. 极简快捷键提示行（短键帽 + help 完整气泡；视口底部浮层提示显示时淡出避免重叠）
             HStack(spacing: 12) {
@@ -479,7 +502,6 @@ private struct RingMainCard: View {
             .lineLimit(1)
             .opacity(isToastVisible ? 0 : 1)
             .frame(maxWidth: .infinity, alignment: .center)
-            .padding(.top, 12)
         }
         .frame(maxWidth: .infinity)
     }
@@ -786,45 +808,78 @@ struct SlotRingPreview: View {
                     .padding(.bottom, 10)
 
                 HStack(spacing: 6) {
-                    Button {
+                    CenterHubCapsuleButton(
+                        title: primaryTitle,
+                        foregroundColor: HTMLSpecs.accentBlue,
+                        normalFill: HTMLSpecs.accentBlue.opacity(0.10),
+                        hoverFill: HTMLSpecs.accentBlue.opacity(0.18),
+                        accessibilityLabel: "\(primaryTitle)槽位",
+                        accessibilityHint: "点击\(primaryTitle)第 \(selected.index + 1) 位内容"
+                    ) {
                         onEditSlotClicked?(selected.index, selected.slot.id)
-                    } label: {
-                        Text(primaryTitle).offset(y: 1)
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(HTMLSpecs.accentBlue)
-                    .frame(height: 25)
-                    .padding(.horizontal, 10)
-                    .background(
-                        Capsule()
-                            .fill(HTMLSpecs.accentBlue.opacity(0.10))
-                    )
-                    .accessibilityLabel("\(primaryTitle)槽位")
-                    .accessibilityHint("点击\(primaryTitle)第 \(selected.index + 1) 位内容")
 
-                    Button {
+                    CenterHubCapsuleButton(
+                        title: "移除",
+                        foregroundColor: Color.black.opacity(0.65),
+                        normalFill: Color.black.opacity(0.05),
+                        hoverFill: Color.black.opacity(0.10),
+                        accessibilityLabel: "移除槽位",
+                        accessibilityHint: "点击移除第 \(selected.index + 1) 位内容"
+                    ) {
                         onDeleteSlotClicked?(selected.index, selected.slot.id)
-                    } label: {
-                        Text("移除").offset(y: 1)
                     }
-                    .buttonStyle(.plain)
-                    .font(.system(size: 11.5, weight: .medium))
-                    .foregroundColor(Color.black.opacity(0.65))
-                    .frame(height: 25)
-                    .padding(.horizontal, 10)
-                    .background(
-                        Capsule()
-                            .fill(Color.black.opacity(0.05))
-                    )
-                    .accessibilityLabel("移除槽位")
-                    .accessibilityHint("点击移除第 \(selected.index + 1) 位内容")
                 }
             }
             .frame(width: 128, height: 75)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("第 \(selected.index + 1) 槽位详情")
+        } else {
+            VStack(spacing: 4) {
+                Text("点击槽位编辑")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Color.black.opacity(0.38))
+                Text("拖拽可调换顺序")
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundColor(Color.black.opacity(0.28))
+            }
+            .multilineTextAlignment(.center)
+            .frame(width: 124)
+            .allowsHitTesting(false)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("点击槽位编辑，拖拽可调换顺序")
         }
+    }
+}
+
+private struct CenterHubCapsuleButton: View {
+    let title: String
+    let foregroundColor: Color
+    let normalFill: Color
+    let hoverFill: Color
+    let accessibilityLabel: String
+    let accessibilityHint: String
+    let action: () -> Void
+
+    @State private var isHovered: Bool = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(foregroundColor)
+                .padding(.horizontal, 10)
+                .frame(height: 25)
+                .background(
+                    Capsule()
+                        .fill(isHovered ? hoverFill : normalFill)
+                )
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .accessibilityLabel(accessibilityLabel)
+        .accessibilityHint(accessibilityHint)
     }
 }
 
@@ -1420,12 +1475,13 @@ final class RingPreviewHostView: NSView {
             slotLayer.bounds = CGRect(x: 0, y: 0, width: iconSize, height: iconSize)
             slotLayer.position = CGPoint(x: posX, y: posY)
             slotLayer.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-            slotLayer.cornerRadius = cornerRadius
+            slotLayer.cornerRadius = iconSize / 2
             slotLayer.masksToBounds = false // 保留外部阴影不被裁剪
             slotLayer.name = "slot_\(i)"
 
             if i < slots.count, let action = slots[i].action {
                 // 仅设置页环形槽位移除有图标背后的外加白方底和选中蓝描边
+                slotLayer.cornerRadius = cornerRadius
                 slotLayer.backgroundColor = nil
                 slotLayer.shadowOpacity = 0.0
 
@@ -1439,16 +1495,35 @@ final class RingPreviewHostView: NSView {
                 iconLayer.contents = resolver.icon(for: action, size: CGSize(width: innerSide, height: innerSide))
                 slotLayer.addSublayer(iconLayer)
             } else {
-                slotLayer.backgroundColor = NSColor(white: 1.0, alpha: 0.40).cgColor
-                let dashLayer = CAShapeLayer()
-                dashLayer.frame = CGRect(origin: .zero, size: CGSize(width: iconSize, height: iconSize))
-                dashLayer.path = CGPath(roundedRect: CGRect(origin: .zero, size: CGSize(width: iconSize, height: iconSize)),
-                                        cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
-                dashLayer.fillColor = nil
-                dashLayer.strokeColor = NSColor(white: 0.0, alpha: 0.20).cgColor
-                dashLayer.lineWidth = 1.5
-                dashLayer.lineDashPattern = [4, 3]
-                slotLayer.addSublayer(dashLayer)
+                // 呼应桌面真实圆环空槽：轻盈圆形虚线凹槽 + 柔和居中加号
+                slotLayer.backgroundColor = nil
+                let wellRect = CGRect(origin: .zero, size: CGSize(width: iconSize, height: iconSize))
+                let wellLayer = CAShapeLayer()
+                wellLayer.frame = wellRect
+                wellLayer.path = CGPath(ellipseIn: wellRect.insetBy(dx: 0.75, dy: 0.75), transform: nil)
+                wellLayer.fillColor = NSColor(white: 0.0, alpha: 0.03).cgColor
+                wellLayer.strokeColor = NSColor(white: 0.0, alpha: 0.18).cgColor
+                wellLayer.lineWidth = 1.25
+                wellLayer.lineDashPattern = [3.5, 3.0]
+                wellLayer.lineCap = .round
+                slotLayer.addSublayer(wellLayer)
+
+                let mid = iconSize / 2
+                let arm = iconSize * 0.15
+                let plusPath = CGMutablePath()
+                plusPath.move(to: CGPoint(x: mid - arm, y: mid))
+                plusPath.addLine(to: CGPoint(x: mid + arm, y: mid))
+                plusPath.move(to: CGPoint(x: mid, y: mid - arm))
+                plusPath.addLine(to: CGPoint(x: mid, y: mid + arm))
+
+                let plusLayer = CAShapeLayer()
+                plusLayer.frame = wellRect
+                plusLayer.path = plusPath
+                plusLayer.fillColor = nil
+                plusLayer.strokeColor = NSColor(white: 0.0, alpha: 0.30).cgColor
+                plusLayer.lineWidth = 1.6
+                plusLayer.lineCap = .round
+                slotLayer.addSublayer(plusLayer)
             }
             slotsContainerLayer.addSublayer(slotLayer)
         }
@@ -1571,7 +1646,6 @@ final class RingPreviewHostView: NSView {
         let cy = (bounds.height - side) / 2 + side / 2
         let radius = HTMLSpecs.ringDiameter * HTMLSpecs.slotRadiusPercent
         let iconSize: CGFloat = count >= 7 ? 44.0 : 52.0
-        let cornerRadius: CGFloat = count >= 7 ? 12.0 : 13.0
 
         let angleDeg = (360.0 / Double(count)) * Double(idx) - 90.0
         let rad = angleDeg * .pi / 180.0
@@ -1580,7 +1654,7 @@ final class RingPreviewHostView: NSView {
         let rect = CGRect(x: posX - iconSize / 2, y: posY - iconSize / 2, width: iconSize, height: iconSize)
 
         focusHighlightLayer.frame = bounds
-        focusHighlightLayer.path = CGPath(roundedRect: rect, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+        focusHighlightLayer.path = CGPath(ellipseIn: rect, transform: nil)
         focusHighlightLayer.isHidden = false
     }
 

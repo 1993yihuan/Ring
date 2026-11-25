@@ -13,6 +13,15 @@ struct TriggersSettingsPage: View {
     @State private var waitingForRelease = false
     @State private var recordedKeyCode: UInt16 = 0
     @State private var keyMonitor: Any?
+    @State private var hoveredChoice: TriggerChoiceKind?
+
+    private enum TriggerChoiceKind: Equatable {
+        case doubleOption
+        case doubleCommand
+        case combination
+    }
+
+    private static let combinationDetailHelp = "⌘Space、⌃Space、⌘Tab 等系统组合会被拒绝。Shift 加字母等于大写输入，Option 加字母可能产生特殊字符或参与输入法组合。录制时只接收本窗口按键，按 Esc 取消；注册成功表示系统接受了该组合，不保证每个应用都会送达。"
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
@@ -23,30 +32,37 @@ struct TriggersSettingsPage: View {
                 )
 
                 SettingsCard {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         Text("启动方式")
-                            .font(.system(size: 15, weight: .semibold))
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(HTMLSpecs.textColor)
+                            .padding(.bottom, 2)
                         choiceRow(.doubleTap(.option),
+                                  kind: .doubleOption,
                                   title: "双击 Option",
                                   detail: "连续按两次同一侧 Option 打开环形；第二次按住时移动指针选择，松开启动。")
                         choiceRow(.doubleTap(.command),
+                                  kind: .doubleCommand,
                                   title: "双击 Command",
                                   detail: "连续按两次同一侧 Command，操作与 Option 相同。按住 Command 时系统可能显示「键入以使用 Siri」提示，Ring 不改变系统行为。")
                         combinationRow
                         messages
                     }
                 }
-                HStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 12) {
                     Button("恢复默认（双击 Option）") { trigger.resetToDefault() }
+                        .controlSize(.small)
                         .disabled(recording)
                     Text("选择立即生效，保存在配置目录的 trigger.json；重启 Ring 后继续使用。")
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(Color.black.opacity(0.50))
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                 }
             }
-            .padding(24)
+            .padding(.horizontal, 24)
+            .padding(.top, 16)
+            .padding(.bottom, 24)
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -62,54 +78,128 @@ struct TriggersSettingsPage: View {
         .onDisappear { endRecording(released: false) }
     }
 
-    private func choiceRow(_ choice: TriggerBinding, title: String, detail: String) -> some View {
-        Button {
+    private func optionRowBackground(selected: Bool, hovered: Bool, emphasized: Bool = false) -> some View {
+        let fill: Color = (selected || emphasized) ? HTMLSpecs.accentBlue.opacity(0.06) : (hovered ? Color.black.opacity(0.03) : Color.clear)
+        let stroke: Color = emphasized ? HTMLSpecs.accentBlue.opacity(0.45) : (selected ? HTMLSpecs.accentBlue.opacity(0.32) : Color.black.opacity(0.06))
+        return RoundedRectangle(cornerRadius: 10, style: .continuous)
+            .fill(fill)
+            .overlay(
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(stroke, lineWidth: 1)
+            )
+    }
+
+    private func choiceRow(_ choice: TriggerBinding, kind: TriggerChoiceKind, title: String, detail: String) -> some View {
+        let isSelected = trigger.binding == choice
+        let isHovered = hoveredChoice == kind
+        return Button {
             guard !recording else { return }
             trigger.select(choice)
         } label: {
             HStack(alignment: .top, spacing: 10) {
-                radio(selected: trigger.binding == choice).padding(.top, 2)
+                radio(selected: isSelected).padding(.top, 2)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title)
-                        .font(.system(size: 13, weight: .medium))
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(HTMLSpecs.textColor)
                     Text(detail)
-                        .font(.system(size: 11))
-                        .foregroundStyle(.secondary)
+                        .font(.system(size: 12))
+                        .foregroundStyle(Color.black.opacity(0.50))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(optionRowBackground(selected: isSelected, hovered: isHovered))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .onHover { inside in
+            if inside {
+                hoveredChoice = kind
+            } else if hoveredChoice == kind {
+                hoveredChoice = nil
+            }
+        }
         .disabled(recording)
     }
 
     private var combinationRow: some View {
-        HStack(alignment: .top, spacing: 10) {
-            radio(selected: trigger.binding.isCombination).padding(.top, 2)
-            VStack(alignment: .leading, spacing: 4) {
+        let isSelected = trigger.binding.isCombination
+        let isHovered = hoveredChoice == .combination
+        return HStack(alignment: .top, spacing: 10) {
+            radio(selected: isSelected).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 8) {
                     Text("自定义组合键")
-                        .font(.system(size: 13, weight: .medium))
-                    Text(status)
-                        .font(.system(size: 12, design: .monospaced))
-                        .foregroundStyle(recording ? Color.accentColor : Color.secondary)
+                        .font(.system(size: 13.5, weight: .medium))
+                        .foregroundStyle(HTMLSpecs.textColor)
+
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.07))
+                            .frame(width: 16, height: 16)
+                        Text("?")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundColor(Color.black.opacity(0.55))
+                    }
+                    .help(Self.combinationDetailHelp)
+
+                    combinationStatusBadge
+
                     Button(recording ? "取消" : (trigger.binding.isCombination ? "重新录制" : "录制")) {
                         if recording { endRecording(released: false) } else { beginRecording() }
                     }
                     .controlSize(.small)
                 }
-                Text("组合键只能有一个修饰键（Command、Control、Option 或 Shift 中的一个）加一个普通键。按住这两个键打开环形，移动指针选择，先松开任意一个键启动；没选中就只是关闭。⌘Space、⌃Space、⌘Tab 等系统组合会被拒绝。录制时只接收这个窗口的按键，按 Esc 取消。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Shift 加字母等于大写输入，Option 加字母可能产生特殊字符或参与输入法组合。注册成功表示系统接受了这个组合，不保证每个应用都会把它送达。")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
+                Text("单修饰键（⌘ / ⌃ / ⌥ / ⇧）加普通键；按住唤出、先松任意键启动，按 Esc 取消录制。")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Color.black.opacity(0.50))
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(optionRowBackground(selected: isSelected, hovered: isHovered, emphasized: recording))
+        .onHover { inside in
+            if inside {
+                hoveredChoice = .combination
+            } else if hoveredChoice == .combination {
+                hoveredChoice = nil
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var combinationStatusBadge: some View {
+        if recording || waitingForRelease {
+            Text(status)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(HTMLSpecs.accentBlue)
+                .padding(.horizontal, 8)
+                .frame(height: 20)
+                .background(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(HTMLSpecs.accentBlue.opacity(0.10))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(HTMLSpecs.accentBlue.opacity(0.45), lineWidth: 1)
+                )
+        } else if trigger.binding.isCombination {
+            MacKbdText(key: trigger.binding.shortTitle)
+        } else {
+            Text("未设置")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Color.black.opacity(0.45))
+                .padding(.horizontal, 7)
+                .frame(height: 19)
+                .background(
+                    Capsule()
+                        .fill(Color.black.opacity(0.05))
+                )
         }
     }
 
