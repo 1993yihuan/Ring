@@ -83,6 +83,36 @@ final class SlotIconProvider {
     }
 
     func lockScreenIcon(size: CGSize = CGSize(width: 64, height: 64)) -> NSImage {
+        badgeSymbolIcon(
+            symbolName: "lock.fill",
+            accessibilityDescription: "锁定屏幕",
+            topColor: NSColor(srgbRed: 0.23, green: 0.28, blue: 0.36, alpha: 1.0),
+            bottomColor: NSColor(srgbRed: 0.13, green: 0.16, blue: 0.22, alpha: 1.0),
+            borderAlpha: 0.18,
+            pointSizeRatio: 0.42,
+            size: size
+        )
+    }
+
+    func returnToPreviousAppIcon(size: CGSize = CGSize(width: 64, height: 64)) -> NSImage {
+        badgeSymbolIcon(
+            symbolName: "arrow.uturn.backward",
+            accessibilityDescription: "返回上一个应用",
+            topColor: NSColor(srgbRed: 0.18, green: 0.54, blue: 0.98, alpha: 1.0),
+            bottomColor: NSColor(srgbRed: 0.04, green: 0.41, blue: 0.90, alpha: 1.0),
+            borderAlpha: 0.22,
+            pointSizeRatio: 0.40,
+            size: size
+        )
+    }
+
+    private func badgeSymbolIcon(symbolName: String,
+                                 accessibilityDescription: String,
+                                 topColor: NSColor,
+                                 bottomColor: NSColor,
+                                 borderAlpha: CGFloat,
+                                 pointSizeRatio: CGFloat,
+                                 size: CGSize) -> NSImage {
         let side = max(min(size.width, size.height), 16)
         let targetSize = NSSize(width: side, height: side)
         return NSImage(size: targetSize, flipped: false) { rect in
@@ -90,22 +120,19 @@ final class SlotIconProvider {
             let cornerRadius = insetRect.width * 0.22
             let backgroundPath = NSBezierPath(roundedRect: insetRect, xRadius: cornerRadius, yRadius: cornerRadius)
 
-            let gradient = NSGradient(
-                starting: NSColor(srgbRed: 0.23, green: 0.28, blue: 0.36, alpha: 1.0),
-                ending: NSColor(srgbRed: 0.13, green: 0.16, blue: 0.22, alpha: 1.0)
-            )
+            let gradient = NSGradient(starting: topColor, ending: bottomColor)
             gradient?.draw(in: backgroundPath, angle: -90)
 
-            NSColor.white.withAlphaComponent(0.18).setStroke()
+            NSColor.white.withAlphaComponent(borderAlpha).setStroke()
             backgroundPath.lineWidth = max(1, side * 0.02)
             backgroundPath.stroke()
 
-            let symbolConfig = NSImage.SymbolConfiguration(pointSize: side * 0.42, weight: .semibold)
-            if let symbol = NSImage(systemSymbolName: "lock.fill", accessibilityDescription: "锁定屏幕")?
+            let symbolConfig = NSImage.SymbolConfiguration(pointSize: side * pointSizeRatio, weight: .semibold)
+            if let symbol = NSImage(systemSymbolName: symbolName, accessibilityDescription: accessibilityDescription)?
                 .withSymbolConfiguration(symbolConfig) {
                 let tinted = NSImage(size: symbol.size, flipped: false) { symRect in
                     symbol.draw(in: symRect)
-                    NSColor.white.withAlphaComponent(0.95).set()
+                    NSColor.white.withAlphaComponent(0.96).set()
                     symRect.fill(using: .sourceAtop)
                     return true
                 }

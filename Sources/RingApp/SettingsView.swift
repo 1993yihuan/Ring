@@ -2013,6 +2013,7 @@ final class SettingsModel: ObservableObject {
     @Published var entranceDurationError: String?
     @Published var hapticFeedbackEnabled: Bool
     @Published var showCenterLabelOnHover: Bool
+    @Published var returnToPreviousAppEnabled: Bool
     @Published var lastError: String?
     @Published var activePickerTarget: PickerTarget?
 
@@ -2030,6 +2031,7 @@ final class SettingsModel: ObservableObject {
         self.entranceDurationText = String(self.config.entranceDurationMilliseconds)
         self.hapticFeedbackEnabled = self.config.hapticFeedbackEnabled
         self.showCenterLabelOnHover = self.config.showCenterLabelOnHover
+        self.returnToPreviousAppEnabled = self.config.returnToPreviousAppEnabled
         self.store = store
         self.iconProvider = SlotIconProvider(dataDirectory: store.directory)
         self.metadataFetcher = WebMetadataFetcher(dataDirectory: store.directory)
@@ -2124,6 +2126,12 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
+    func setReturnToPreviousAppEnabled(_ enabled: Bool) {
+        guard enabled != returnToPreviousAppEnabled else { return }
+        returnToPreviousAppEnabled = enabled
+        commit()
+    }
+
     func save() {
         commit()
     }
@@ -2147,6 +2155,7 @@ final class SettingsModel: ObservableObject {
         updated.entranceDurationMilliseconds = entranceDurationMilliseconds
         updated.hapticFeedbackEnabled = hapticFeedbackEnabled
         updated.showCenterLabelOnHover = showCenterLabelOnHover
+        updated.returnToPreviousAppEnabled = returnToPreviousAppEnabled
         do {
             let normalized = updated.normalized()
             try store.save(normalized)
@@ -2154,6 +2163,7 @@ final class SettingsModel: ObservableObject {
             slots = normalized.slots
             hapticFeedbackEnabled = normalized.hapticFeedbackEnabled
             showCenterLabelOnHover = normalized.showCenterLabelOnHover
+            returnToPreviousAppEnabled = normalized.returnToPreviousAppEnabled
             entranceDurationMilliseconds = normalized.entranceDurationMilliseconds
             entranceDurationText = String(normalized.entranceDurationMilliseconds)
             lastError = nil
@@ -2165,6 +2175,7 @@ final class SettingsModel: ObservableObject {
             entranceDurationText = String(entranceDurationMilliseconds)
             hapticFeedbackEnabled = config.hapticFeedbackEnabled
             showCenterLabelOnHover = config.showCenterLabelOnHover
+            returnToPreviousAppEnabled = config.returnToPreviousAppEnabled
             lastError = "未保存：\(error.localizedDescription)"
         }
     }

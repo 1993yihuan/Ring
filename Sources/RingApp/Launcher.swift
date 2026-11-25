@@ -14,6 +14,59 @@ final class Launcher: AppLaunching, WebURLLaunching, FileLaunching, ScreenLockin
         dispatcher.open(action, completion: completion)
     }
 
+    func activateRunningApplication(_ target: RunningAppIdentity,
+                                    fallbackAction: SlotAction,
+                                    completion: @escaping (String?) -> Void) {
+        guard let app = NSRunningApplication(processIdentifier: target.processIdentifier),
+              !app.isTerminated else {
+            open(fallbackAction, completion: completion)
+            return
+        }
+
+        if let url = app.bundleURL ?? target.bundlePath.map({ URL(fileURLWithPath: $0) }),
+           FileManager.default.fileExists(atPath: url.path) {
+            let configuration = NSWorkspace.OpenConfiguration()
+            configuration.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: configuration) { [weak self] _, error in
+                DispatchQueue.main.async {
+                    guard let error else {
+                        completion(nil)
+                        return
+                    }
+                    if let runningApp = NSRunningApplication(processIdentifier: target.processIdentifier),
+                       !runningApp.isTerminated {
+                        if Self.activateDirectly(runningApp) {
+                            completion(nil)
+                        } else {
+                            completion(SlotActionDispatchError.openFailed(error.localizedDescription).description)
+                        }
+                    } else if let self {
+                        self.open(fallbackAction, completion: completion)
+                    } else {
+                        completion(SlotActionDispatchError.openFailed(error.localizedDescription).description)
+                    }
+                }
+            }
+            return
+        }
+
+        if Self.activateDirectly(app) {
+            completion(nil)
+        } else if app.isTerminated {
+            open(fallbackAction, completion: completion)
+        } else {
+            completion(SlotActionDispatchError.openFailed("无法切回 \(target.displayName)").description)
+        }
+    }
+
+    private static func activateDirectly(_ app: NSRunningApplication) -> Bool {
+        if #available(macOS 14.0, *) {
+            return app.activate()
+        } else {
+            return app.activate(options: [.activateIgnoringOtherApps])
+        }
+    }
+
     func openApp(_ reference: AppReference, completion: @escaping (String?) -> Void) {
         let url = URL(fileURLWithPath: reference.path)
         guard FileManager.default.fileExists(atPath: url.path) else {
@@ -130,5 +183,16 @@ final class Launcher: AppLaunching, WebURLLaunching, FileLaunching, ScreenLockin
             if cmp != .orderedSame { return cmp == .orderedAscending }
             return lhs.path < rhs.path
         }
+    }
+}
+
+extension RunningAppIdentity {
+    init(runningApplication app: NSRunningApplication) {
+        let name = app.localizedName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackName = app.bundleURL?.deletingPathExtension().lastPathComponent ?? "上一个应用"
+        self.init(processIdentifier: app.processIdentifier,
+                  bundleIdentifier: app.bundleIdentifier,
+                  bundlePath: app.bundleURL?.path,
+                  displayName: (name?.isEmpty == false) ? name! : fallbackName)
     }
 }

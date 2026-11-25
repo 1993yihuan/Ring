@@ -212,6 +212,7 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
     public static let entranceDurationRange = 0...2000
     public static let defaultHapticFeedbackEnabled = true
     public static let defaultShowCenterLabelOnHover = true
+    public static let defaultReturnToPreviousAppEnabled = true
 
     public var version: Int
     public var slots: [Slot]
@@ -224,19 +225,23 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
     public var hapticFeedbackEnabled: Bool
     /// Whether hovering any configured slot displays its display name at the center of the ring.
     public var showCenterLabelOnHover: Bool
+    /// Whether selecting an app slot that is already frontmost returns to the previous app.
+    public var returnToPreviousAppEnabled: Bool
 
     public init(version: Int = LauncherConfiguration.schemaVersion,
                 slots: [Slot],
                 visibleSlotCount: Int = LauncherConfiguration.defaultVisibleSlotCount,
                 entranceDurationMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds,
                 hapticFeedbackEnabled: Bool = LauncherConfiguration.defaultHapticFeedbackEnabled,
-                showCenterLabelOnHover: Bool = LauncherConfiguration.defaultShowCenterLabelOnHover) {
+                showCenterLabelOnHover: Bool = LauncherConfiguration.defaultShowCenterLabelOnHover,
+                returnToPreviousAppEnabled: Bool = LauncherConfiguration.defaultReturnToPreviousAppEnabled) {
         self.version = version
         self.slots = slots
         self.visibleSlotCount = visibleSlotCount
         self.entranceDurationMilliseconds = entranceDurationMilliseconds
         self.hapticFeedbackEnabled = hapticFeedbackEnabled
         self.showCenterLabelOnHover = showCenterLabelOnHover
+        self.returnToPreviousAppEnabled = returnToPreviousAppEnabled
     }
 
     public static func empty(capacity: Int = LauncherConfiguration.slotCapacity,
@@ -245,7 +250,8 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
                               visibleSlotCount: visibleSlotCount ?? capacity,
                               entranceDurationMilliseconds: LauncherConfiguration.defaultEntranceDurationMilliseconds,
                               hapticFeedbackEnabled: LauncherConfiguration.defaultHapticFeedbackEnabled,
-                              showCenterLabelOnHover: LauncherConfiguration.defaultShowCenterLabelOnHover)
+                              showCenterLabelOnHover: LauncherConfiguration.defaultShowCenterLabelOnHover,
+                              returnToPreviousAppEnabled: LauncherConfiguration.defaultReturnToPreviousAppEnabled)
     }
 
     /// The milliseconds a user's text really means, or nil when it is not a whole number
@@ -283,7 +289,8 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
                                      visibleSlotCount: visible,
                                      entranceDurationMilliseconds: entrance,
                                      hapticFeedbackEnabled: hapticFeedbackEnabled,
-                                     showCenterLabelOnHover: showCenterLabelOnHover)
+                                     showCenterLabelOnHover: showCenterLabelOnHover,
+                                     returnToPreviousAppEnabled: returnToPreviousAppEnabled)
     }
 
     public func validate() throws {
@@ -338,6 +345,7 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
         case entranceDurationMilliseconds
         case hapticFeedbackEnabled
         case showCenterLabelOnHover
+        case returnToPreviousAppEnabled
     }
 
     public init(from decoder: Decoder) throws {
@@ -354,6 +362,8 @@ public struct LauncherConfiguration: Codable, Sendable, Equatable {
             ?? LauncherConfiguration.defaultHapticFeedbackEnabled
         showCenterLabelOnHover = try container.decodeIfPresent(Bool.self, forKey: .showCenterLabelOnHover)
             ?? LauncherConfiguration.defaultShowCenterLabelOnHover
+        returnToPreviousAppEnabled = try container.decodeIfPresent(Bool.self, forKey: .returnToPreviousAppEnabled)
+            ?? LauncherConfiguration.defaultReturnToPreviousAppEnabled
     }
 
     public func encoded() throws -> Data {

@@ -49,6 +49,20 @@ final class RingView: NSView {
         let name: String
         let icon: NSImage?
         let isFilled: Bool
+        let hoverIcon: NSImage?
+        let hoverTitle: String?
+
+        init(name: String,
+             icon: NSImage?,
+             isFilled: Bool,
+             hoverIcon: NSImage? = nil,
+             hoverTitle: String? = nil) {
+            self.name = name
+            self.icon = icon
+            self.isFilled = isFilled
+            self.hoverIcon = hoverIcon
+            self.hoverTitle = hoverTitle
+        }
     }
 
     /// Read by the coordinator when a release must be judged against the drawn ring.
@@ -199,7 +213,8 @@ final class RingView: NSView {
                                    names: items.map(\.name),
                                    filled: items.map(\.isFilled),
                                    mode: mode,
-                                   showCenterLabel: showCenterLabel)
+                                   showCenterLabel: showCenterLabel,
+                                   hoverNames: items.map(\.hoverTitle))
         let width = max(2 * RingPresentation.holeRadius * unit - 8 * unit, 60 * unit)
         var inkBottom = centre.y
         if let title = text.title {
@@ -329,7 +344,9 @@ final class RingView: NSView {
                 // while the icon shrinks.
                 image.shadowRadius = 1.2 * unit
                 image.shadowOffset = CGSize(width: 0, height: -1 * unit)
-                image.contents = content(for: item, size: image.frame.size)
+                image.contents = content(for: item,
+                                         isHovered: index == hoveredIndex && item.isFilled,
+                                         size: image.frame.size)
             }
         }
         CATransaction.commit()
@@ -347,18 +364,22 @@ final class RingView: NSView {
             // Only a filled slot grows. An empty slot draws the website's plus well, which is
             // not a `.slot` there and does not react to hover — and it is already wider than
             // an icon, so growing it would paint outside the clickable frame.
-            let isFilled = items.indices.contains(index) && items[index].isFilled
+            let item = items.indices.contains(index) ? items[index] : nil
+            let isFilled = item?.isFilled == true
             let grows = index == hovered && isFilled
             let scale = grows ? RingPresentation.hoverScale : 1
             container.transform = CATransform3DMakeScale(scale, scale, 1)
+            if let item, item.hoverIcon != nil, let image = container.sublayers?.first {
+                image.contents = content(for: item, isHovered: grows, size: image.frame.size)
+            }
         }
         CATransaction.commit()
     }
 
     /// The icon's pixels. An empty slot shows the website's plus well, drawn once into an
     /// image so a layer can carry it.
-    private func content(for item: Item, size: CGSize) -> CGImage? {
-        if let icon = item.icon {
+    private func content(for item: Item, isHovered: Bool, size: CGSize) -> CGImage? {
+        if let icon = (isHovered ? item.hoverIcon : nil) ?? item.icon {
             var rect = CGRect(origin: .zero, size: icon.size)
             return icon.cgImage(forProposedRect: &rect, context: nil, hints: nil)
         }

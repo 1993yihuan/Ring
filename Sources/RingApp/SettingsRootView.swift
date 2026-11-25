@@ -8,6 +8,7 @@ struct SettingsRootView: View {
     @ObservedObject var model: SettingsModel
     @ObservedObject var trigger: TriggerController
     @StateObject private var update: UpdateModel
+    @StateObject private var loginItem: LoginItemController
     @State private var selection: SettingsSection?
     private let version: String?
 
@@ -15,12 +16,14 @@ struct SettingsRootView: View {
          trigger: TriggerController,
          initialSelection: SettingsSection = .ring,
          version: String? = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-         update: UpdateModel? = nil) {
+         update: UpdateModel? = nil,
+         loginItem: LoginItemController? = nil) {
         self.model = model
         self.trigger = trigger
         _selection = State(initialValue: initialSelection)
         self.version = version
         _update = StateObject(wrappedValue: update ?? UpdateModel())
+        _loginItem = StateObject(wrappedValue: loginItem ?? LoginItemController(service: SystemLoginItemService()))
     }
 
     private var page: SettingsSection { selection ?? .ring }
@@ -118,7 +121,7 @@ struct SettingsRootView: View {
         case .triggers:
             TriggersSettingsPage(trigger: trigger)
         case .general:
-            GeneralSettingsPage(model: model)
+            GeneralSettingsPage(model: model, loginItem: loginItem)
         case .about:
             AboutSettingsPage(update: update, version: version)
         }
@@ -265,11 +268,12 @@ struct SettingsPageHeading: View {
 /// 通用设置页（对齐 HTML #view-general：统一底色与卡片风格）
 struct GeneralSettingsPage: View {
     @ObservedObject var model: SettingsModel
+    @ObservedObject var loginItem: LoginItemController
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                SettingsPageHeading(title: "通用设置", subtitle: "本地配置文件、菜单栏运行方式与触控反馈偏好")
+                SettingsPageHeading(title: "通用设置", subtitle: "本地配置文件、开机自启动、菜单栏运行方式与触控反馈偏好")
 
                 SettingsCard {
                     VStack(alignment: .leading, spacing: 16) {
@@ -311,6 +315,67 @@ struct GeneralSettingsPage: View {
                                 .padding(.horizontal, 8)
                                 .padding(.vertical, 3)
                                 .background(Capsule().fill(Color.black.opacity(0.05)))
+                        }
+
+                        Rectangle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(height: 1)
+
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack(alignment: .center) {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("开机自启动")
+                                        .font(.system(size: 13.5, weight: .medium))
+                                        .foregroundColor(HTMLSpecs.textColor)
+                                    Text("登录 macOS 时自动在菜单栏启动 Ring")
+                                        .font(.system(size: 12))
+                                        .foregroundColor(Color.black.opacity(0.50))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                }
+                                Spacer(minLength: 16)
+                                Toggle(isOn: Binding(
+                                    get: { loginItem.isEnabled },
+                                    set: { loginItem.setEnabled($0) }
+                                )) {
+                                    Text("开机自启动")
+                                }
+                                .labelsHidden()
+                                .toggleStyle(.switch)
+                                .tint(HTMLSpecs.accentBlue)
+                                .accessibilityLabel("开机自启动")
+                            }
+
+                            if loginItem.requiresApproval {
+                                HStack(alignment: .center, spacing: 12) {
+                                    Text(loginItem.statusNotice ?? "已在系统登录项登记，请在「系统设置 → 通用 → 登录项与扩展」中允许 Ring 后才会开机自启动。")
+                                        .font(.system(size: 11.5))
+                                        .foregroundColor(Color(red: 180/255, green: 83/255, blue: 9/255))
+                                        .fixedSize(horizontal: false, vertical: true)
+                                    Spacer(minLength: 8)
+                                    Button("打开系统设置") {
+                                        loginItem.openSystemSettingsLoginItems()
+                                    }
+                                    .controlSize(.small)
+                                }
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                        .fill(Color(red: 245/255, green: 158/255, blue: 11/255).opacity(0.10))
+                                )
+                            } else if let notice = loginItem.statusNotice {
+                                Text(notice)
+                                    .font(.system(size: 11.5))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+
+                            if let error = loginItem.lastError {
+                                Text(error)
+                                    .font(.system(size: 11.5))
+                                    .foregroundColor(.red)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
                         }
 
                         Rectangle()
@@ -366,6 +431,33 @@ struct GeneralSettingsPage: View {
                             .tint(HTMLSpecs.accentBlue)
                             .accessibilityLabel("悬停时在环心显示名称")
                         }
+
+                        Rectangle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(height: 1)
+
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("前台应用再选时返回上一个应用")
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundColor(HTMLSpecs.textColor)
+                                Text("当前应用已在最前台时，悬停显示返回图标，松手切回上一个应用")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 16)
+                            Toggle(isOn: Binding(
+                                get: { model.returnToPreviousAppEnabled },
+                                set: { model.setReturnToPreviousAppEnabled($0) }
+                            )) {
+                                Text("前台应用再选时返回上一个应用")
+                            }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(HTMLSpecs.accentBlue)
+                            .accessibilityLabel("前台应用再选时返回上一个应用")
+                        }
                     }
                 }
             }
@@ -376,6 +468,12 @@ struct GeneralSettingsPage: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(HTMLSpecs.windowBackground)
+        .onAppear {
+            loginItem.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginItem.refresh()
+        }
     }
 }
 

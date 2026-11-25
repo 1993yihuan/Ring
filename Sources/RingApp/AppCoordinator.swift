@@ -52,6 +52,12 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     private var launch = RingLaunchState()
     /// Entrance timing captured when the active ring opens so entrance/exit stay paired.
     private var activeLaunchMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds
+    private lazy var previousAppTracker = PreviousAppTracker(
+        ownProcessIdentifier: ProcessInfo.processInfo.processIdentifier,
+        ownBundleIdentifier: Bundle.main.bundleIdentifier
+    )
+    /// Per-slot return target resolved once when the ring opens so hover visuals and release action match.
+    private var activeReturnTargets: [RunningAppIdentity?] = []
 
     private static let screenLockedNotification = Notification.Name("com.apple.screenIsLocked")
     private static let screenUnlockedNotification = Notification.Name("com.apple.screenIsUnlocked")
@@ -111,6 +117,19 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
         buildStatusItem()
         installMonitor()
+        if let frontmost = NSWorkspace.shared.frontmostApplication.map(RunningAppIdentity.init(runningApplication:)) {
+            previousAppTracker.recordActivation(frontmost)
+        }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceDidActivateApplication(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil)
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(workspaceDidTerminateApplication(_:)),
+            name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil)
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
             selector: #selector(accessibilityDisplayOptionsChanged),
@@ -204,6 +223,20 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// fire after it.
     @objc private func systemDidWake() {
         resetInteraction(reapplying: true)
+    }
+
+    @objc private func workspaceDidActivateApplication(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            return
+        }
+        previousAppTracker.recordActivation(RunningAppIdentity(runningApplication: app))
+    }
+
+    @objc private func workspaceDidTerminateApplication(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
+            return
+        }
+        previousAppTracker.recordTermination(processIdentifier: app.processIdentifier)
     }
 
     private func resetInteraction(reapplying: Bool) {
@@ -390,10 +423,17 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let resolver = iconProvider ?? SlotIconProvider(
             dataDirectory: dataDirectory ?? FileManager.default.homeDirectoryForCurrentUser
         )
-        let items = session.slots.map { slot in
+        let returnTargets = resolvedReturnTargets(for: session.slots)
+        activeReturnTargets = returnTargets
+        let returnIcon: NSImage? = returnTargets.contains(where: { $0 != nil })
+            ? resolver.returnToPreviousAppIcon(size: CGSize(width: 64, height: 64))
+            : nil
+        let items = zip(session.slots, returnTargets).map { slot, returnTarget in
             RingView.Item(name: slot.displayName,
                           icon: slot.action.map { resolver.icon(for: $0, size: CGSize(width: 64, height: 64)) },
-                          isFilled: slot.isFilled)
+                          isFilled: slot.isFilled,
+                          hoverIcon: returnTarget != nil ? returnIcon : nil,
+                          hoverTitle: returnTarget.map { PreviousAppTracker.centerReturnLabel(for: $0) })
         }
         ringView = view
 
@@ -575,6 +615,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         trigger?.hotKeyCancelled()
         syncCombinationProbe()
         session.cancel()
+        activeReturnTargets = []
         monitor.forwardsPointerMoves = false
         beginExit()
         show(decision: nil)
@@ -648,10 +689,41 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         clearHighlight()
     }
 
+    private func resolvedReturnTargets(for slots: [Slot]) -> [RunningAppIdentity?] {
+        let frontmost = NSWorkspace.shared.frontmostApplication.map(RunningAppIdentity.init(runningApplication:))
+        if let frontmost {
+            previousAppTracker.recordActivation(frontmost)
+        }
+        if let previous = previousAppTracker.previous {
+            let running = NSRunningApplication(processIdentifier: previous.processIdentifier)
+            if running == nil || running?.isTerminated == true {
+                previousAppTracker.recordTermination(processIdentifier: previous.processIdentifier)
+            }
+        }
+        let isEnabled = session.config.returnToPreviousAppEnabled
+        return slots.map { slot in
+            guard let action = slot.action else { return nil }
+            return previousAppTracker.returnTarget(for: action,
+                                                   frontmost: frontmost,
+                                                   isEnabled: isEnabled)
+        }
+    }
+
     private func selectSlot(_ index: Int) {
+        let returnTarget = activeReturnTargets.indices.contains(index) ? activeReturnTargets[index] : nil
         switch session.click(slot: index) {
         case .launch(let request):
             hidePanel()
+            if let returnTarget {
+                launcher.activateRunningApplication(returnTarget, fallbackAction: request.action) { [weak self] error in
+                    self?.session.launchFinished(error: error)
+                    if let error {
+                        NSLog("Ring: %@", error)
+                        self?.presentErrorAlert(error)
+                    }
+                }
+                return
+            }
             if case .systemAction(.lockScreen) = request.action {
                 recognizer.reset()
                 trigger?.hotKeyCancelled()
@@ -697,6 +769,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         beginExit()
         show(decision: nil)
         activeScreenFrame = nil
+        activeReturnTargets = []
         keepingOverlayForRelease = false
         // Global pointer tracking exists only to follow the gesture across displays.
         monitor.forwardsPointerMoves = false

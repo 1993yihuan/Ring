@@ -121,6 +121,7 @@ public enum SlotReordering {
                                      visibleSlotCount: normalized.visibleSlotCount,
                                      entranceDurationMilliseconds: normalized.entranceDurationMilliseconds,
                                      hapticFeedbackEnabled: normalized.hapticFeedbackEnabled,
-                                     showCenterLabelOnHover: normalized.showCenterLabelOnHover)
+                                     showCenterLabelOnHover: normalized.showCenterLabelOnHover,
+                                     returnToPreviousAppEnabled: normalized.returnToPreviousAppEnabled)
     }
 }

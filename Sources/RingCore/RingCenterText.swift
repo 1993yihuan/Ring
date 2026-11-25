@@ -31,12 +31,16 @@ public struct RingCenterText: Sendable, Equatable {
 public enum RingCenter {
     /// Maps the hovered slot onto the centre text. An empty slot must not borrow a
     /// neighbour's name, and a slot without a name is not something to launch.
-    public static func hover(index: Int?, names: [String], filled: [Bool]) -> RingHover {
+    public static func hover(index: Int?,
+                             names: [String],
+                             hoverNames: [String?]? = nil,
+                             filled: [Bool]) -> RingHover {
         guard let index, names.indices.contains(index), filled.indices.contains(index) else {
             return .none
         }
         guard filled[index] else { return .emptySlot }
-        let name = names[index]
+        let preferred = hoverNames.flatMap { $0.indices.contains(index) ? $0[index] : nil }
+        let name = (preferred?.isEmpty == false) ? preferred! : names[index]
         return name.isEmpty ? .none : .slot(name)
     }
 
@@ -45,8 +49,9 @@ public enum RingCenter {
     public static func text(for decision: RingPointerDecision,
                             names: [String],
                             filled: [Bool],
-                            showCenterLabel: Bool = true) -> RingCenterText {
-        return text(for: hover(index: decision.slot, names: names, filled: filled),
+                            showCenterLabel: Bool = true,
+                            hoverNames: [String?]? = nil) -> RingCenterText {
+        return text(for: hover(index: decision.slot, names: names, hoverNames: hoverNames, filled: filled),
                     showCenterLabel: showCenterLabel)
     }
 
@@ -55,12 +60,17 @@ public enum RingCenter {
                             names: [String],
                             filled: [Bool],
                             mode: RingInputMode,
-                            showCenterLabel: Bool = true) -> RingCenterText {
+                            showCenterLabel: Bool = true,
+                            hoverNames: [String?]? = nil) -> RingCenterText {
         switch mode {
         case .angularClick:
-            return text(for: decision, names: names, filled: filled, showCenterLabel: showCenterLabel)
+            return text(for: decision,
+                        names: names,
+                        filled: filled,
+                        showCenterLabel: showCenterLabel,
+                        hoverNames: hoverNames)
         case .holdToLaunch:
-            switch hover(index: decision.slot, names: names, filled: filled) {
+            switch hover(index: decision.slot, names: names, hoverNames: hoverNames, filled: filled) {
             case .none:
                 return RingCenterText(title: nil, action: nil)
             case .emptySlot:

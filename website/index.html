@@ -3,23 +3,23 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-    <title>Ring — 双击 Option，即刻启动</title>
-    <meta name="description" content="开源免费的环形启动器，在光标处打开。Ring for macOS。">
+    <title>Ring — 双击 Option / Command，即刻启动</title>
+    <meta name="description" content="在光标处弹出圆环的 macOS 开源免费启动器：免辅助功能与输入监控权限，支持应用、网址、文件与锁屏、悬停返回上一个应用与原生开机自启动。">
     <meta name="theme-color" content="#F7F4EF">
     <link rel="canonical" href="https://1993yihuan.github.io/Ring/">
     <meta property="og:type" content="website">
     <meta property="og:locale" content="zh_CN">
     <meta property="og:site_name" content="Ring">
-    <meta property="og:title" content="Ring — 双击 Option，即刻启动">
-    <meta property="og:description" content="开源免费的环形启动器，在光标处打开。">
+    <meta property="og:title" content="Ring — 双击 Option / Command，即刻启动">
+    <meta property="og:description" content="在光标处弹出圆环，免系统权限，开源免费；也支持自定义组合键。">
     <meta property="og:url" content="https://1993yihuan.github.io/Ring/">
     <meta property="og:image" content="https://1993yihuan.github.io/Ring/assets/og.png">
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="Ring 环形启动器，顶部微信槽位带有青色高光，环心显示微信。">
+    <meta property="og:image:alt" content="Ring 环形启动器，暖纸圆盘与青色高光展示。">
     <meta name="twitter:card" content="summary_large_image">
-    <meta name="twitter:title" content="Ring — 双击 Option，即刻启动">
-    <meta name="twitter:description" content="开源免费的环形启动器，在光标处打开。">
+    <meta name="twitter:title" content="Ring — 双击 Option / Command，即刻启动">
+    <meta name="twitter:description" content="在光标处弹出圆环，免系统权限，开源免费；也支持自定义组合键。">
     <meta name="twitter:image" content="https://1993yihuan.github.io/Ring/assets/og.png">
     <link rel="icon" href="assets/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="icon" href="assets/favicon-16.png" type="image/png" sizes="16x16">
@@ -27,137 +27,435 @@
     <link rel="preload" href="assets/fonts/inter.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="assets/fonts/noto-sans-sc.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="styles.css">
+    <script src="app.js" defer></script>
   </head>
   <body>
-    <header class="nav">
-      <a class="brand" href="#top">
-        <img src="assets/ring-icon.png" width="192" height="192" alt="">
-        <span>Ring</span>
-      </a>
-      <nav aria-label="页面">
-        <a href="#download">下载</a>
-        <a class="nav-github" href="https://github.com/1993yihuan/Ring">GitHub</a>
-      </nav>
+    <header class="site-header">
+      <div class="nav">
+        <a class="brand" href="#top">
+          <img src="assets/ring-icon.png" width="192" height="192" alt="">
+          <span>Ring</span>
+        </a>
+        <nav aria-label="主导航">
+          <a href="#features">功能</a>
+          <a href="#guide">上手</a>
+          <a href="#download">下载</a>
+          <a class="nav-github" href="https://github.com/1993yihuan/Ring" target="_blank" rel="noopener noreferrer">GitHub<span class="ext-arrow" aria-hidden="true">↗</span></a>
+        </nav>
+      </div>
     </header>
 
     <main id="top">
-      <p class="eyebrow">RING FOR MACOS</p>
-      <h1>双击 <span class="opt">Option</span>，即刻启动</h1>
-      <p class="lede">开源免费的环形启动器，在光标处打开。</p>
-      <div class="hero-stage">
-      <div class="hero-tilt">
-      <div class="hero" role="img" aria-label="环形启动器，共八个槽位。顶部微信图标带青色高光，环心写着微信；顺时针还有一个深色图标、Safari、邮件、音乐和备忘录，左侧两个槽位为空。">
-        <svg class="ring-art" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-          <defs>
-            <linearGradient id="r-fill" x1="0.32" y1="0" x2="0.68" y2="1">
-              <stop offset="0%" stop-color="#F6F2EC"/>
-              <stop offset="48%" stop-color="#EEE9E1"/>
-              <stop offset="100%" stop-color="#E3DDD4"/>
-            </linearGradient>
-            <filter id="r-grain" x="0" y="0" width="100%" height="100%">
-              <feTurbulence type="fractalNoise" baseFrequency="1.4" numOctaves="2" seed="3" result="n"/>
-              <feColorMatrix type="saturate" values="0" in="n" result="g"/>
-              <feComponentTransfer in="g">
-                <feFuncA type="table" tableValues="0 0.055"/>
-              </feComponentTransfer>
-            </filter>
-            <mask id="r-torus" maskUnits="userSpaceOnUse">
-              <rect width="400" height="400" fill="black"/>
-              <circle cx="200" cy="200" r="172" fill="white"/>
-              <circle cx="200" cy="200" r="84" fill="black"/>
-            </mask>
-            <radialGradient id="r-cyan" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stop-color="#8FDCEA" stop-opacity="0.55"/>
-              <stop offset="55%" stop-color="#8FDCEA" stop-opacity="0.18"/>
-              <stop offset="100%" stop-color="#8FDCEA" stop-opacity="0"/>
-            </radialGradient>
-          </defs>
+      <section class="hero-section" aria-labelledby="hero-title">
+        <p class="eyebrow">RING FOR MACOS</p>
+        <h1 id="hero-title">
+          双击
+          <button
+            type="button"
+            class="key-roller"
+            id="key-roller"
+            aria-label="触发修饰键：当前显示 Option，点击切换为 Command"
+            title="点击切换修饰键，悬停暂停滚动"
+          >
+            <span class="key-roller-sizer" aria-hidden="true">Command</span>
+            <span class="key-roller-viewport" aria-hidden="true">
+              <span class="key-roller-track" id="key-roller-track">
+                <span class="key-roller-item">Option</span>
+                <span class="key-roller-item">Command</span>
+                <span class="key-roller-item">Option</span>
+              </span>
+            </span>
+          </button><span class="title-tail">，即刻启动</span>
+        </h1>
+        <p class="lede">在光标处弹出圆环，免系统权限，开源免费；也支持自定义组合键。</p>
 
-          <g mask="url(#r-torus)">
-            <rect width="400" height="400" fill="url(#r-fill)"/>
-            <rect width="400" height="400" filter="url(#r-grain)"/>
-          </g>
+        <div class="hero-stage">
+          <div class="hero-tilt">
+            <div class="hero" id="ring-demo" data-slots="8" aria-label="交互式 Ring 圆环演示，支持 3 到 8 个槽位切换与悬停返回上一个应用体验">
+              <svg class="ring-art" viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                <defs>
+                  <linearGradient id="r-fill" x1="0.28" y1="0" x2="0.72" y2="1">
+                    <stop offset="0%" stop-color="#F7F3ED"/>
+                    <stop offset="50%" stop-color="#EFEAE1"/>
+                    <stop offset="100%" stop-color="#E3DDD3"/>
+                  </linearGradient>
+                  <filter id="r-grain" x="0" y="0" width="100%" height="100%">
+                    <feTurbulence type="fractalNoise" baseFrequency="1.35" numOctaves="2" seed="3" result="n"/>
+                    <feColorMatrix type="saturate" values="0" in="n" result="g"/>
+                    <feComponentTransfer in="g">
+                      <feFuncA type="table" tableValues="0 0.05"/>
+                    </feComponentTransfer>
+                  </filter>
+                  <mask id="r-torus" maskUnits="userSpaceOnUse">
+                    <rect width="400" height="400" fill="black"/>
+                    <circle cx="200" cy="200" r="172" fill="white"/>
+                    <circle cx="200" cy="200" r="84" fill="black"/>
+                  </mask>
+                  <radialGradient id="r-cyan" cx="50%" cy="50%" r="50%">
+                    <stop offset="0%" stop-color="#8FDCEA" stop-opacity="0.72"/>
+                    <stop offset="52%" stop-color="#8FDCEA" stop-opacity="0.26"/>
+                    <stop offset="100%" stop-color="#8FDCEA" stop-opacity="0"/>
+                  </radialGradient>
+                </defs>
 
-          <!-- outer bezel: dark hairline + inner light hairline -->
-          <circle cx="200" cy="200" r="172" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
-          <circle cx="200" cy="200" r="170.2" fill="none" stroke="#FFFFFF" stroke-opacity="0.7" stroke-width="1.05"/>
-          <!-- inner bezel -->
-          <circle cx="200" cy="200" r="84" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
-          <circle cx="200" cy="200" r="85.85" fill="none" stroke="#FFFFFF" stroke-opacity="0.65" stroke-width="1.05"/>
+                <g mask="url(#r-torus)">
+                  <rect width="400" height="400" fill="url(#r-fill)"/>
+                  <rect width="400" height="400" filter="url(#r-grain)"/>
+                  <g class="r-cyan-rotator" id="ring-cyan-rotator">
+                    <ellipse class="r-cyan-wash" cx="200" cy="72" rx="64" ry="50" fill="url(#r-cyan)"/>
+                  </g>
+                </g>
 
-          <!-- WeChat accent: a quiet wash on the band, clipped to the torus -->
-          <ellipse class="r-cyan-wash" cx="200" cy="78" rx="58" ry="46" fill="url(#r-cyan)" mask="url(#r-torus)"/>
+                <!-- outer bezel -->
+                <circle cx="200" cy="200" r="172" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
+                <circle cx="200" cy="200" r="170.2" fill="none" stroke="#FFFFFF" stroke-opacity="0.72" stroke-width="1.05"/>
+                <!-- inner bezel -->
+                <circle cx="200" cy="200" r="84" fill="none" stroke="#C9C3B9" stroke-width="1.15"/>
+                <circle cx="200" cy="200" r="85.85" fill="none" stroke="#FFFFFF" stroke-opacity="0.68" stroke-width="1.05"/>
+              </svg>
 
-          <g transform="translate(72, 200)">
-            <circle r="35.2" fill="#E7E2DA"/>
-            <circle r="35.2" fill="none" stroke="#BDB7AE" stroke-width="1.15"/>
-            <circle r="34.05" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="0.9"/>
-            <path d="M-7.6 0h15.2M0-7.6v15.2" fill="none" stroke="#8A8580" stroke-width="1.65" stroke-linecap="round"/>
-          </g>
-          <g transform="translate(109.49, 109.49)">
-            <circle r="35.2" fill="#E7E2DA"/>
-            <circle r="35.2" fill="none" stroke="#BDB7AE" stroke-width="1.15"/>
-            <circle r="34.05" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="0.9"/>
-            <path d="M-7.6 0h15.2M0-7.6v15.2" fill="none" stroke="#8A8580" stroke-width="1.65" stroke-linecap="round"/>
-          </g>
-        </svg>
-        <p class="ring-label">微信</p>
-        <ul class="slots" aria-hidden="true">
-          <li class="slot" style="--a: 0deg; --i: 0"><span class="slot-inner"><img src="assets/icons/wechat.png" srcset="assets/icons/wechat.png 1x, assets/icons/wechat@2x.png 2x" alt="" width="256" height="256"></span></li>
-          <li class="slot" style="--a: 45deg; --i: 1"><span class="slot-inner"><img src="assets/icons/openbot.png" srcset="assets/icons/openbot.png 1x, assets/icons/openbot@2x.png 2x" alt="" width="256" height="256"></span></li>
-          <li class="slot" style="--a: 90deg; --i: 2"><span class="slot-inner"><img src="assets/icons/safari.png" srcset="assets/icons/safari.png 1x, assets/icons/safari@2x.png 2x" alt="" width="256" height="256"></span></li>
-          <li class="slot" style="--a: 135deg; --i: 3"><span class="slot-inner"><img src="assets/icons/mail.png" srcset="assets/icons/mail.png 1x, assets/icons/mail@2x.png 2x" alt="" width="256" height="256"></span></li>
-          <li class="slot" style="--a: 180deg; --i: 4"><span class="slot-inner"><img src="assets/icons/music.png" srcset="assets/icons/music.png 1x, assets/icons/music@2x.png 2x" alt="" width="256" height="256"></span></li>
-          <li class="slot" style="--a: 225deg; --i: 5"><span class="slot-inner"><img src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="256" height="256"></span></li>
-        </ul>
-      </div>
-      </div>
-      </div>
-      <div class="downloads" id="download">
-        <a class="btn btn-primary" href="https://github.com/1993yihuan/Ring/releases/download/v0.1.17/Ring-0.1.17-apple-silicon.dmg">下载 Apple 芯片版</a>
-        <a class="btn btn-secondary" href="https://github.com/1993yihuan/Ring/releases/download/v0.1.17/Ring-0.1.17-intel.dmg">下载 Intel 版</a>
-      </div>
-      <p class="fine">0.1.17 · macOS 13 及更高 · 开源免费 · 首次打开需在系统设置中允许</p>
+              <p class="ring-label" id="ring-label" aria-live="polite">返回 Safari</p>
+
+              <ul class="slots" id="ring-slots">
+                <li class="slot" style="--a: 0deg; --i: 0" data-index="0" data-kind="app" data-name="微信">
+                  <button type="button" class="slot-btn" aria-label="微信">
+                    <span class="slot-inner">
+                      <img src="assets/icons/wechat.png" srcset="assets/icons/wechat.png 1x, assets/icons/wechat@2x.png 2x" alt="" width="256" height="256">
+                    </span>
+                  </button>
+                </li>
+                <li class="slot" style="--a: 45deg; --i: 1" data-index="1" data-kind="app" data-name="Safari">
+                  <button type="button" class="slot-btn" aria-label="Safari">
+                    <span class="slot-inner">
+                      <img src="assets/icons/safari.png" srcset="assets/icons/safari.png 1x, assets/icons/safari@2x.png 2x" alt="" width="256" height="256">
+                    </span>
+                  </button>
+                </li>
+                <li class="slot is-foreground is-returning" style="--a: 90deg; --i: 2" data-index="2" data-kind="app" data-name="备忘录" data-foreground="true" data-prev-app="Safari">
+                  <button type="button" class="slot-btn" aria-label="备忘录（当前前台应用，悬停或激活后返回 Safari）">
+                    <span class="slot-inner">
+                      <img class="slot-img-default" src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="256" height="256">
+                      <span class="slot-return-badge" aria-hidden="true">
+                        <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                          <defs>
+                            <linearGradient id="ret-bg" x1="0.2" y1="0" x2="0.8" y2="1">
+                              <stop offset="0%" stop-color="#359BFF"/>
+                              <stop offset="100%" stop-color="#0A76EB"/>
+                            </linearGradient>
+                          </defs>
+                          <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#ret-bg)"/>
+                          <rect x="2.75" y="2.75" width="58.5" height="58.5" rx="14.25" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="1.5"/>
+                          <path d="M27 21L17 30L27 39" fill="none" stroke="#FFFFFF" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+                          <path d="M18.5 30H35.5C41.851 30 47 34.925 47 41C47 43.2 46.3 45.2 45 46.8" fill="none" stroke="#FFFFFF" stroke-width="4.2" stroke-linecap="round"/>
+                        </svg>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+                <li class="slot" style="--a: 135deg; --i: 3" data-index="3" data-kind="app" data-name="邮件">
+                  <button type="button" class="slot-btn" aria-label="邮件">
+                    <span class="slot-inner">
+                      <img src="assets/icons/mail.png" srcset="assets/icons/mail.png 1x, assets/icons/mail@2x.png 2x" alt="" width="256" height="256">
+                    </span>
+                  </button>
+                </li>
+                <li class="slot" style="--a: 180deg; --i: 4" data-index="4" data-kind="app" data-name="音乐">
+                  <button type="button" class="slot-btn" aria-label="音乐">
+                    <span class="slot-inner">
+                      <img src="assets/icons/music.png" srcset="assets/icons/music.png 1x, assets/icons/music@2x.png 2x" alt="" width="256" height="256">
+                    </span>
+                  </button>
+                </li>
+                <li class="slot" style="--a: 225deg; --i: 5" data-index="5" data-kind="app" data-name="OpenBot">
+                  <button type="button" class="slot-btn" aria-label="OpenBot">
+                    <span class="slot-inner">
+                      <img src="assets/icons/openbot.png" srcset="assets/icons/openbot.png 1x, assets/icons/openbot@2x.png 2x" alt="" width="256" height="256">
+                    </span>
+                  </button>
+                </li>
+                <li class="slot slot-empty" style="--a: 270deg; --i: 6" data-index="6" data-kind="empty" data-name="空位">
+                  <button type="button" class="slot-btn" aria-label="空位 7">
+                    <span class="slot-inner">
+                      <span class="empty-well" aria-hidden="true">
+                        <svg viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="36" cy="36" r="34.2" fill="#E7E2DA"/>
+                          <circle cx="36" cy="36" r="34.2" fill="none" stroke="#BDB7AE" stroke-width="1.2"/>
+                          <circle cx="36" cy="36" r="33" fill="none" stroke="#FFFFFF" stroke-opacity="0.58" stroke-width="0.95"/>
+                          <path d="M28.4 36h15.2M36 28.4v15.2" fill="none" stroke="#8A8580" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+                <li class="slot slot-empty" style="--a: 315deg; --i: 7" data-index="7" data-kind="empty" data-name="空位">
+                  <button type="button" class="slot-btn" aria-label="空位 8">
+                    <span class="slot-inner">
+                      <span class="empty-well" aria-hidden="true">
+                        <svg viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">
+                          <circle cx="36" cy="36" r="34.2" fill="#E7E2DA"/>
+                          <circle cx="36" cy="36" r="34.2" fill="none" stroke="#BDB7AE" stroke-width="1.2"/>
+                          <circle cx="36" cy="36" r="33" fill="none" stroke="#FFFFFF" stroke-opacity="0.58" stroke-width="0.95"/>
+                          <path d="M28.4 36h15.2M36 28.4v15.2" fill="none" stroke="#8A8580" stroke-width="1.8" stroke-linecap="round"/>
+                        </svg>
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <aside class="ring-float-pill" aria-hidden="true">
+            <span class="pill-dot"></span>
+            <span>3–8 槽位可调 · 悬停返回上一个应用</span>
+          </aside>
+        </div>
+
+        <div class="ring-controls" aria-label="圆环互动控制">
+          <div class="control-group" role="group" aria-label="切换圆环槽位数量">
+            <span class="control-label">槽位</span>
+            <div class="seg-control" id="slot-count-control">
+              <button type="button" class="seg-btn" data-count="3" aria-pressed="false">3</button>
+              <button type="button" class="seg-btn" data-count="4" aria-pressed="false">4</button>
+              <button type="button" class="seg-btn" data-count="5" aria-pressed="false">5</button>
+              <button type="button" class="seg-btn" data-count="6" aria-pressed="false">6</button>
+              <button type="button" class="seg-btn" data-count="7" aria-pressed="false">7</button>
+              <button type="button" class="seg-btn is-active" data-count="8" aria-pressed="true">8</button>
+            </div>
+          </div>
+          <button type="button" class="btn-mini" id="replay-bloom">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M13 8a5 5 0 1 1-1.46-3.54" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
+              <path d="M13 2.5v2.8h-2.8" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+            <span>预览「轻盈开合」</span>
+          </button>
+        </div>
+
+        <p class="demo-hint" id="demo-hint">当前模拟前台：备忘录 · 上一个应用：Safari · 悬停「备忘录」体验返回箭头</p>
+
+        <div class="downloads">
+          <a class="btn btn-primary" data-download="apple-silicon" href="https://github.com/1993yihuan/Ring/releases/download/v0.2.8/Ring-0.2.8-apple-silicon.dmg">下载 Apple 芯片版</a>
+          <a class="btn btn-secondary" data-download="intel" href="https://github.com/1993yihuan/Ring/releases/download/v0.2.8/Ring-0.2.8-intel.dmg">下载 Intel 版</a>
+        </div>
+        <p class="fine" data-version-meta>v0.2.8 · macOS 13 及更高 · 开源免费 · 首次打开需在系统设置中允许</p>
+      </section>
+
+      <section class="section" id="features" aria-labelledby="features-heading">
+        <div class="section-head">
+          <p class="section-eyebrow">FEATURES</p>
+          <h2 id="features-heading">为日常高频切换而打磨</h2>
+        </div>
+
+        <div class="bento-grid">
+          <!-- Row 1, Card 1 -->
+          <article class="bento-card bento-ivory bento-span-3 bento-row-split">
+            <div class="bento-copy">
+              <h3>零系统权限</h3>
+              <p>免辅助功能与输入监控，安装即用，不索取隐私授权。</p>
+            </div>
+            <div class="bento-visual visual-shield" aria-hidden="true">
+              <svg viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+                <defs>
+                  <linearGradient id="shield-fill" x1="0.2" y1="0" x2="0.8" y2="1">
+                    <stop offset="0%" stop-color="#F7F4EE"/>
+                    <stop offset="100%" stop-color="#E4DDD2"/>
+                  </linearGradient>
+                  <linearGradient id="shield-inner" x1="0.2" y1="0" x2="0.8" y2="1">
+                    <stop offset="0%" stop-color="#EFEAE1"/>
+                    <stop offset="100%" stop-color="#DED7CB"/>
+                  </linearGradient>
+                  <filter id="shield-shadow" x="-15%" y="-15%" width="130%" height="140%">
+                    <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#302A24" flood-opacity="0.11"/>
+                  </filter>
+                </defs>
+                <g filter="url(#shield-shadow)">
+                  <path d="M60 14L24 27.5V56C24 80.5 39.2 98.6 60 107C80.8 98.6 96 80.5 96 56V27.5L60 14Z" fill="url(#shield-fill)" stroke="#C8C1B6" stroke-width="1.5"/>
+                  <path d="M60 16.5L26.5 29V56C26.5 79 40.6 96 60 104C79.4 96 93.5 79 93.5 56V29L60 16.5Z" fill="none" stroke="#FFFFFF" stroke-opacity="0.78" stroke-width="1.2"/>
+                </g>
+                <path d="M60 25L33 35.2V56C33 74.5 44.2 88.2 60 95C75.8 88.2 87 74.5 87 56V35.2L60 25Z" fill="url(#shield-inner)" stroke="#CCC5BA" stroke-width="1"/>
+                <path d="M47.5 59.5L56 68L73.5 50.5" fill="none" stroke="#4D4945" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+            </div>
+          </article>
+
+          <!-- Row 1, Card 2 -->
+          <article class="bento-card bento-sand bento-span-3 bento-row-split">
+            <div class="bento-copy">
+              <h3>四类动作</h3>
+              <p>应用 · 网址与 Deep Link · 文件 / 文件夹 · 锁屏，支持拖拽调换顺序。</p>
+            </div>
+            <div class="bento-visual visual-actions" aria-hidden="true">
+              <div class="action-grid">
+                <div class="action-tile action-app" title="应用">
+                  <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="6" y="6" width="10.5" height="10.5" rx="3" fill="#4CA4F8"/>
+                    <rect x="19.5" y="6" width="10.5" height="10.5" rx="3" fill="#2A7BE4"/>
+                    <rect x="6" y="19.5" width="10.5" height="10.5" rx="3" fill="#2A7BE4"/>
+                    <rect x="19.5" y="19.5" width="10.5" height="10.5" rx="3" fill="#8FDCEA"/>
+                  </svg>
+                </div>
+                <div class="action-tile" title="网址与 Deep Link">
+                  <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <circle cx="18" cy="18" r="10" fill="none" stroke="#57534E" stroke-width="1.8"/>
+                    <ellipse cx="18" cy="18" rx="4.6" ry="10" fill="none" stroke="#57534E" stroke-width="1.6"/>
+                    <path d="M8.8 14.5H27.2M8.8 21.5H27.2" fill="none" stroke="#57534E" stroke-width="1.5"/>
+                  </svg>
+                </div>
+                <div class="action-tile" title="文件与文件夹">
+                  <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8 12.5C8 11.1 9.1 10 10.5 10H15.2L17.4 12.6H25.5C26.9 12.6 28 13.7 28 15.1V24.5C28 25.9 26.9 27 25.5 27H10.5C9.1 27 8 25.9 8 24.5V12.5Z" fill="none" stroke="#57534E" stroke-width="1.8" stroke-linejoin="round"/>
+                  </svg>
+                </div>
+                <div class="action-tile" title="锁定屏幕">
+                  <svg viewBox="0 0 36 36" xmlns="http://www.w3.org/2000/svg">
+                    <rect x="10.5" y="16.5" width="15" height="11" rx="2.8" fill="none" stroke="#57534E" stroke-width="1.8"/>
+                    <path d="M13.5 16.5V13.2C13.5 10.7 15.5 8.8 18 8.8C20.5 8.8 22.5 10.7 22.5 13.2V16.5" fill="none" stroke="#57534E" stroke-width="1.8" stroke-linecap="round"/>
+                    <circle cx="18" cy="21.8" r="1.4" fill="#57534E"/>
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Row 2, Card 3 -->
+          <article class="bento-card bento-ivory bento-span-2">
+            <div class="bento-copy">
+              <h3>悬停返回上一个应用</h3>
+              <p>悬停当前前台应用槽位变身返回箭头，单手往返切窗，绝不隐藏当前应用。</p>
+            </div>
+            <div class="bento-visual visual-return" aria-hidden="true">
+              <div class="return-flow">
+                <div class="return-node">
+                  <img src="assets/icons/notes.png" srcset="assets/icons/notes.png 1x, assets/icons/notes@2x.png 2x" alt="" width="56" height="56">
+                  <span>备忘录</span>
+                </div>
+                <svg class="flow-arrow" viewBox="0 0 28 16" xmlns="http://www.w3.org/2000/svg">
+                  <path d="M2 8H24M19 3L25 8L19 13" fill="none" stroke="#8A8580" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+                <div class="return-node">
+                  <span class="return-badge-mini">
+                    <svg viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+                      <defs>
+                        <linearGradient id="ret-mini-bg" x1="0.2" y1="0" x2="0.8" y2="1">
+                          <stop offset="0%" stop-color="#359BFF"/>
+                          <stop offset="100%" stop-color="#0A76EB"/>
+                        </linearGradient>
+                      </defs>
+                      <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#ret-mini-bg)"/>
+                      <path d="M27 21L17 30L27 39" fill="none" stroke="#FFFFFF" stroke-width="4.4" stroke-linecap="round" stroke-linejoin="round"/>
+                      <path d="M18.5 30H35.5C41.851 30 47 34.925 47 41C47 43.2 46.3 45.2 45 46.8" fill="none" stroke="#FFFFFF" stroke-width="4.4" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span>返回 Safari</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Row 2, Card 4 -->
+          <article class="bento-card bento-sand bento-span-2">
+            <div class="bento-copy">
+              <h3>三种触发手势</h3>
+              <p>双击 Option · 双击 Command · 自定义组合键（单修饰键 + 普通键）。</p>
+            </div>
+            <div class="bento-visual visual-keys" aria-hidden="true">
+              <div class="keycap-row">
+                <div class="keycap">
+                  <span class="key-sym">⌥</span>
+                  <span class="key-name">Option</span>
+                </div>
+                <div class="keycap">
+                  <span class="key-sym">⌘</span>
+                  <span class="key-name">Command</span>
+                </div>
+                <div class="keycap keycap-combo">
+                  <span class="key-sym">⌥K</span>
+                  <span class="key-name">自定义</span>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Row 2, Card 5 -->
+          <article class="bento-card bento-ivory bento-span-2">
+            <div class="bento-copy">
+              <h3>菜单栏常驻 · 开机自启动</h3>
+              <p>只占菜单栏不占 Dock，支持原生登录项自启与触控板微震反馈。</p>
+            </div>
+            <div class="bento-visual visual-menubar" aria-hidden="true">
+              <div class="menubar-mock">
+                <div class="menubar-left">
+                  <span class="menubar-ring-dot" title="Ring 菜单栏图标">
+                    <svg viewBox="0 0 20 20" xmlns="http://www.w3.org/2000/svg">
+                      <circle cx="10" cy="10" r="6.5" fill="none" stroke="#171716" stroke-width="1.7" stroke-dasharray="2.6 2.1"/>
+                    </svg>
+                  </span>
+                  <img class="menubar-app-icon" src="assets/ring-icon.png" alt="" width="24" height="24">
+                  <span class="menubar-title">开机自启动</span>
+                </div>
+                <span class="toggle-pill is-on">
+                  <span class="toggle-knob"></span>
+                </span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="guide" aria-labelledby="guide-heading">
+        <div class="section-head">
+          <p class="section-eyebrow">QUICK START</p>
+          <h2 id="guide-heading">三步上手</h2>
+        </div>
+
+        <ol class="steps-grid">
+          <li class="step-card">
+            <span class="step-num">01</span>
+            <h3>下载拖入应用程序</h3>
+            <p>按 Mac 芯片选择 Apple Silicon 或 Intel 版 DMG，将 Ring.app 拖入「应用程序」。</p>
+          </li>
+          <li class="step-card">
+            <span class="step-num">02</span>
+            <h3>首次打开放行</h3>
+            <p>无公证签名首次打开如遇提示，前往「系统设置 → 隐私与安全性」点「仍要打开」，或右键 Ring 选「打开」。</p>
+          </li>
+          <li class="step-card">
+            <span class="step-num">03</span>
+            <h3>抬手即刻启动</h3>
+            <p>在光标处呼出圆环，移向目标槽位松手执行，按 Esc 或移回环心随时取消。</p>
+          </li>
+        </ol>
+      </section>
+
+      <section class="section download-section" id="download" aria-labelledby="download-heading">
+        <div class="cta-card">
+          <h2 id="download-heading">即刻体验 Ring</h2>
+          <p class="cta-sub">轻盈开合动效、本地配置存储、MIT 开源免费。</p>
+          <div class="downloads">
+            <a class="btn btn-primary" data-download="apple-silicon" href="https://github.com/1993yihuan/Ring/releases/download/v0.2.8/Ring-0.2.8-apple-silicon.dmg">下载 Apple 芯片版</a>
+            <a class="btn btn-secondary" data-download="intel" href="https://github.com/1993yihuan/Ring/releases/download/v0.2.8/Ring-0.2.8-intel.dmg">下载 Intel 版</a>
+          </div>
+          <p class="fine" data-version-meta>v0.2.8 · macOS 13 及更高 · 开源免费 · 首次打开需在系统设置中允许</p>
+        </div>
+      </section>
     </main>
-  
-    <script>
-      (function () {
-        var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        var stage = document.querySelector(".hero-stage");
-        var tilt = document.querySelector(".hero-tilt");
-        if (reduce || !stage || !tilt) return;
 
-        var targetX = 0, targetY = 0, curX = 0, curY = 0;
-        var max = 5;
-        var main = document.querySelector("main");
-
-        function onMove(e) {
-          var r = stage.getBoundingClientRect();
-          var dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
-          var dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
-          if (dx > 1) dx = 1; else if (dx < -1) dx = -1;
-          if (dy > 1) dy = 1; else if (dy < -1) dy = -1;
-          targetX = dx * max;
-          targetY = -dy * max;
-        }
-        function onLeave() {
-          targetX = 0;
-          targetY = 0;
-        }
-
-        window.addEventListener("mousemove", onMove, { passive: true });
-        if (main) main.addEventListener("mouseleave", onLeave);
-
-        function tick() {
-          curX += (targetX - curX) * 0.12;
-          curY += (targetY - curY) * 0.12;
-          if (Math.abs(curX) < 0.01 && Math.abs(targetX) === 0) curX = 0;
-          if (Math.abs(curY) < 0.01 && Math.abs(targetY) === 0) curY = 0;
-          tilt.style.transform = "rotateY(" + curX.toFixed(3) + "deg) rotateX(" + curY.toFixed(3) + "deg)";
-          requestAnimationFrame(tick);
-        }
-        requestAnimationFrame(tick);
-      })();
-    </script>
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <a class="footer-brand" href="#top">
+          <img src="assets/ring-icon.png" width="22" height="22" alt="">
+          <span>Ring</span>
+        </a>
+        <div class="footer-links">
+          <a href="https://github.com/1993yihuan/Ring/blob/main/LICENSE" target="_blank" rel="noopener noreferrer">MIT 开源协议</a>
+          <span aria-hidden="true">·</span>
+          <a href="https://github.com/1993yihuan/Ring" target="_blank" rel="noopener noreferrer">GitHub</a>
+          <span aria-hidden="true">·</span>
+          <a href="https://github.com/1993yihuan/Ring/releases" target="_blank" rel="noopener noreferrer">全部版本</a>
+        </div>
+        <p class="footer-ver" data-version-short>v0.2.8 · macOS 13+</p>
+      </div>
+    </footer>
   </body>
 </html>
