@@ -505,8 +505,8 @@ final class RingCenterTests: XCTestCase {
     private let filled = [true, false, true]
 
     func testHoverOnFilledSlotNamesThatApp() {
-        XCTAssertEqual(RingCenter.hover(index: 0, names: names, filled: filled), .app("微信"))
-        XCTAssertEqual(RingCenter.hover(index: 2, names: names, filled: filled), .app("OpenBot"))
+        XCTAssertEqual(RingCenter.hover(index: 0, names: names, filled: filled), .slot("微信"))
+        XCTAssertEqual(RingCenter.hover(index: 2, names: names, filled: filled), .slot("OpenBot"))
     }
 
     func testHoverOnEmptySlotDoesNotBorrowANeighbourName() {
@@ -519,9 +519,13 @@ final class RingCenterTests: XCTestCase {
     }
 
     func testCentreTextForEachHoverState() {
-        let app = RingCenter.text(for: .app("微信"))
-        XCTAssertNil(app.title, "选中应用时中心完全空白：不显示名字")
-        XCTAssertNil(app.action, "选中应用时中心完全空白：不显示提示")
+        let shown = RingCenter.text(for: .slot("微信"), showCenterLabel: true)
+        XCTAssertEqual(shown.title, "微信")
+        XCTAssertNil(shown.action)
+
+        let hidden = RingCenter.text(for: .slot("微信"), showCenterLabel: false)
+        XCTAssertNil(hidden.title, "关闭开关时中心完全空白：不显示名字")
+        XCTAssertNil(hidden.action, "关闭开关时中心完全空白：不显示提示")
 
         let empty = RingCenter.text(for: .emptySlot)
         XCTAssertEqual(empty.title, "空位")
@@ -536,9 +540,10 @@ final class RingCenterTests: XCTestCase {
     /// either entry, puts "松开取消" or "Esc 取消" there again.
     func testCentreNeverShowsACancelHint() {
         let decisions = [
-            RingCenter.text(for: .none),
-            RingCenter.text(for: .emptySlot),
-            RingCenter.text(for: .app("微信"))
+            RingCenter.text(for: .none, showCenterLabel: true),
+            RingCenter.text(for: .emptySlot, showCenterLabel: true),
+            RingCenter.text(for: .slot("微信"), showCenterLabel: true),
+            RingCenter.text(for: .slot("微信"), showCenterLabel: false)
         ]
         for copy in decisions {
             XCTAssertNotEqual(copy.title, "松开取消")
@@ -554,32 +559,36 @@ final class ConfigurationTests: XCTestCase {
     func testEmptyConfigurationHasEightEmptySlots() {
         let configuration = LauncherConfiguration.empty()
         XCTAssertEqual(configuration.slots.count, 8)
-        XCTAssertTrue(configuration.slots.allSatisfy { $0.app == nil })
+        XCTAssertTrue(configuration.slots.allSatisfy { !$0.isFilled })
+        XCTAssertTrue(configuration.showCenterLabelOnHover)
         XCTAssertNoThrow(try configuration.validate())
     }
 
     func testRoundTripKeepsAppAndSlotIdentity() throws {
         var slots = LauncherConfiguration.empty().slots
-        slots[2].app = AppReference(bundleIdentifier: "com.apple.Safari",
-                                    displayName: "Safari",
-                                    path: "/Applications/Safari.app")
+        let safari = AppReference(bundleIdentifier: "com.apple.Safari",
+                                  displayName: "Safari",
+                                  path: "/Applications/Safari.app")
+        slots[2].action = .app(safari)
         let configuration = LauncherConfiguration(slots: slots)
         let data = try configuration.encoded()
         let decoded = try LauncherConfiguration.decoded(from: data)
         XCTAssertEqual(decoded.slots.count, 8)
-        XCTAssertEqual(decoded.slots[2].app?.bundleIdentifier, "com.apple.Safari")
+        XCTAssertEqual(decoded.slots[2].action, .app(safari))
         XCTAssertEqual(decoded.slots[2].id, slots[2].id)
-        XCTAssertNil(decoded.slots[3].app)
+        XCTAssertFalse(decoded.slots[3].isFilled)
     }
 
     func testRemovedSlotStaysEmptyAndKeepsNeighbours() throws {
         var slots = LauncherConfiguration.empty().slots
-        slots[1].app = AppReference(bundleIdentifier: "com.a", displayName: "A", path: "/A.app")
-        slots[2].app = AppReference(bundleIdentifier: "com.b", displayName: "B", path: "/B.app")
-        slots[2].app = nil
+        let appA = AppReference(bundleIdentifier: "com.a", displayName: "A", path: "/A.app")
+        let appB = AppReference(bundleIdentifier: "com.b", displayName: "B", path: "/B.app")
+        slots[1].action = .app(appA)
+        slots[2].action = .app(appB)
+        slots[2].action = nil
         let decoded = try LauncherConfiguration.decoded(from: try LauncherConfiguration(slots: slots).encoded())
-        XCTAssertEqual(decoded.slots[1].app?.bundleIdentifier, "com.a")
-        XCTAssertNil(decoded.slots[2].app)
+        XCTAssertEqual(decoded.slots[1].action, .app(appA))
+        XCTAssertNil(decoded.slots[2].action)
     }
 
     func testTooManySlotsIsRejected() {
@@ -605,7 +614,7 @@ final class ConfigurationTests: XCTestCase {
     }
 
     func testEmptyPathIsRejected() {
-        let configuration = LauncherConfiguration(slots: [Slot(app: AppReference(bundleIdentifier: "x", displayName: "X", path: ""))])
+        let configuration = LauncherConfiguration(slots: [Slot(action: .app(AppReference(bundleIdentifier: "x", displayName: "X", path: "")))])
         XCTAssertThrowsError(try configuration.validate())
     }
 
@@ -638,13 +647,13 @@ final class SlotStoreTests: XCTestCase {
         }
         let store = SlotStore(directory: directory)
         var slots = LauncherConfiguration.empty().slots
-        slots[0].app = AppReference(bundleIdentifier: "com.example.app",
-                                    displayName: "Example",
-                                    path: "/Applications/Example.app")
+        slots[0].action = .app(AppReference(bundleIdentifier: "com.example.app",
+                                            displayName: "Example",
+                                            path: "/Applications/Example.app"))
         try store.save(LauncherConfiguration(slots: slots))
         let loaded = try store.load()
         XCTAssertEqual(loaded.slots.count, 8)
-        XCTAssertEqual(loaded.slots[0].app?.displayName, "Example")
+        XCTAssertEqual(loaded.slots[0].displayName, "Example")
         XCTAssertTrue(FileManager.default.fileExists(atPath: store.fileURL.path))
     }
 
@@ -669,8 +678,8 @@ final class SlotStoreTests: XCTestCase {
 final class RingSessionTests: XCTestCase {
     private func filledConfiguration() -> LauncherConfiguration {
         var slots = LauncherConfiguration.empty().slots
-        slots[0].app = AppReference(bundleIdentifier: "com.a", displayName: "A", path: "/A.app")
-        slots[1].app = AppReference(bundleIdentifier: "com.b", displayName: "B", path: "/B.app")
+        slots[0].action = .app(AppReference(bundleIdentifier: "com.a", displayName: "A", path: "/A.app"))
+        slots[1].action = .app(AppReference(bundleIdentifier: "com.b", displayName: "B", path: "/B.app"))
         return LauncherConfiguration(slots: slots)
     }
 
@@ -680,7 +689,7 @@ final class RingSessionTests: XCTestCase {
         guard case .launch(let request) = session.click(slot: 0) else {
             return XCTFail("expected launch")
         }
-        XCTAssertEqual(request.reference.bundleIdentifier, "com.a")
+        XCTAssertEqual(request.action.displayName, "A")
         XCTAssertEqual(session.click(slot: 1), .busy)
         session.launchFinished()
         XCTAssertFalse(session.isVisible)
@@ -726,16 +735,16 @@ final class RingSessionTests: XCTestCase {
     }
 
     func testMovingAppKeepsEmptySlotBehind() {
-        let moved = SlotReordering.moveApp(in: filledConfiguration(), from: 0, to: 5)
-        XCTAssertEqual(moved.slots[5].app?.bundleIdentifier, "com.a")
-        XCTAssertNil(moved.slots[0].app)
-        XCTAssertEqual(moved.slots[1].app?.bundleIdentifier, "com.b")
+        let moved = SlotReordering.moveSlot(in: filledConfiguration(), from: 0, to: 5)
+        XCTAssertEqual(moved.slots[5].displayName, "A")
+        XCTAssertNil(moved.slots[0].action)
+        XCTAssertEqual(moved.slots[1].displayName, "B")
         XCTAssertEqual(moved.slots.count, 8)
     }
 
     func testMovingOutOfRangeIsNoOp() {
         let original = filledConfiguration()
-        XCTAssertEqual(SlotReordering.moveApp(in: original, from: 0, to: 99).slots, original.slots)
+        XCTAssertEqual(SlotReordering.moveSlot(in: original, from: 0, to: 99).slots, original.slots)
     }
 }
 
@@ -977,15 +986,17 @@ final class RingPointerTests: XCTestCase {
 
         let outside = RingPointer.decide(outsidePlate(22.5, of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
         XCTAssertEqual(outside.slot, 1)
-        let outsideText = RingCenter.text(for: outside, names: names, filled: filled)
-        XCTAssertNil(outsideText.title, "选中应用时中心不显示名字")
-        XCTAssertNil(outsideText.action, "选中应用时中心不显示提示")
+        let outsideText = RingCenter.text(for: outside, names: names, filled: filled, showCenterLabel: false)
+        XCTAssertNil(outsideText.title, "关闭开关时中心不显示名字")
+        XCTAssertNil(outsideText.action, "关闭开关时中心不显示提示")
+        let outsideShown = RingCenter.text(for: outside, names: names, filled: filled, showCenterLabel: true)
+        XCTAssertEqual(outsideShown.title, "OpenBot", "开启开关时中心显示槽位名称")
 
         let gap = RingPointer.decide(insidePlate(22.5, of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
         XCTAssertEqual(gap.slot, 1, "间隙仍要按角度高亮")
         XCTAssertEqual(gap.action, .cancel, "间隙点击仍是取消")
-        let gapText = RingCenter.text(for: gap, names: names, filled: filled)
-        XCTAssertNil(gapText.title, "间隙也算选中该应用，中心同样留空")
+        let gapText = RingCenter.text(for: gap, names: names, filled: filled, showCenterLabel: false)
+        XCTAssertNil(gapText.title, "关闭开关时中心同样留空")
         XCTAssertNil(gapText.action)
 
         let centre = RingPointer.decide(RingPointer.ringCenter(of: ring), activeScreenFrame: screen, geometry: ring, filled: filled)
@@ -1181,9 +1192,10 @@ final class ProjectPathsTests: XCTestCase {
             supportDirectory: support)
         let store = SlotStore(directory: directory)
         var slots = LauncherConfiguration.empty().slots
-        slots[2].app = AppReference(bundleIdentifier: "com.apple.Safari",
-                                    displayName: "Safari",
-                                    path: "/Applications/Safari.app")
+        let safari = AppReference(bundleIdentifier: "com.apple.Safari",
+                                  displayName: "Safari",
+                                  path: "/Applications/Safari.app")
+        slots[2].action = .app(safari)
         let saved = LauncherConfiguration(slots: slots, visibleSlotCount: 5).normalized()
 
         try store.save(saved)
@@ -1193,7 +1205,7 @@ final class ProjectPathsTests: XCTestCase {
         let loaded = try SlotStore(directory: directory).load()
         XCTAssertEqual(loaded, saved)
         XCTAssertEqual(loaded.visibleSlotCount, 5)
-        XCTAssertEqual(loaded.slots[2].app?.bundleIdentifier, "com.apple.Safari")
+        XCTAssertEqual(loaded.slots[2].action, .app(safari))
     }
 }
 
@@ -1208,7 +1220,7 @@ final class SlotCountTests: XCTestCase {
 
     private func configuration(visible: Int, filled: [Int: String]) -> LauncherConfiguration {
         var slots = LauncherConfiguration.empty().slots
-        for (index, name) in filled { slots[index].app = app(name) }
+        for (index, name) in filled { slots[index].action = .app(app(name)) }
         return LauncherConfiguration(slots: slots, visibleSlotCount: visible).normalized()
     }
 
@@ -1264,7 +1276,7 @@ final class SlotCountTests: XCTestCase {
         lowered.visibleSlotCount = 3
         let stored = try LauncherConfiguration.decoded(from: try lowered.encoded())
         XCTAssertEqual(stored.visibleSlotCount, 3)
-        XCTAssertEqual(stored.visibleSlots.map { $0.app?.displayName }, ["A", "B", "C"])
+        XCTAssertEqual(stored.visibleSlots.map { $0.action?.displayName }, ["A", "B", "C"])
 
         var raised = stored
         raised.visibleSlotCount = 8
@@ -1272,7 +1284,7 @@ final class SlotCountTests: XCTestCase {
         XCTAssertEqual(back.visibleSlotCount, 8)
         XCTAssertEqual(back.slots.map(\.id), ids)
         let expectedNames: [String?] = ["A", "B", "C", nil, nil, "E", nil, "G"]
-        XCTAssertEqual(back.slots.map { $0.app?.displayName }, expectedNames)
+        XCTAssertEqual(back.slots.map { $0.action?.displayName }, expectedNames)
     }
 
     func testSaveFailureKeepsThePreviousFile() throws {
@@ -1294,7 +1306,7 @@ final class SlotCountTests: XCTestCase {
         let session = RingSession(config: configuration(visible: 4, filled: [3: "D", 6: "G"]))
         XCTAssertEqual(session.visibleSlotCount, 4)
         XCTAssertEqual(session.slots.count, 4)
-        XCTAssertEqual(session.slots[3].app?.displayName, "D")
+        XCTAssertEqual(session.slots[3].displayName, "D")
     }
 
     /// A hidden slot must not launch even when its index is passed in directly.
@@ -1310,7 +1322,7 @@ final class SlotCountTests: XCTestCase {
         let session = RingSession(config: configuration(visible: 3, filled: [2: "C"]))
         XCTAssertTrue(session.trigger())
         guard case .launch(let request) = session.click(slot: 2) else { return XCTFail("expected launch") }
-        XCTAssertEqual(request.reference.displayName, "C")
+        XCTAssertEqual(request.action.displayName, "C")
         XCTAssertEqual(session.launchCount, 1)
     }
 
@@ -1322,20 +1334,20 @@ final class SlotCountTests: XCTestCase {
         XCTAssertEqual(session.slots.count, 4)
     }
 
-    func testSetAppAndMoveAppStayInsideTheVisiblePrefix() {
+    func testSetActionAndMoveSlotStayInsideTheVisiblePrefix() {
         let session = RingSession(config: configuration(visible: 3, filled: [0: "A", 1: "B", 2: "C"]))
-        session.setApp(app("H"), at: 6)
-        XCTAssertNil(session.config.slots[6].app, "隐藏位不可通过 setApp 修改")
+        session.setAction(.app(app("H")), at: 6)
+        XCTAssertNil(session.config.slots[6].action, "隐藏位不可通过 setAction 修改")
 
         let hiddenBefore = session.config.slots[6]
-        let moved = SlotReordering.moveApp(in: session.config, from: 0, to: 5)
+        let moved = SlotReordering.moveSlot(in: session.config, from: 0, to: 5)
         XCTAssertEqual(moved, session.config, "隐藏位参与的重排必须整体无效")
         XCTAssertEqual(moved.slots[6], hiddenBefore)
 
-        let swapped = SlotReordering.moveApp(in: session.config, from: 0, to: 2)
+        let swapped = SlotReordering.moveSlot(in: session.config, from: 0, to: 2)
         XCTAssertEqual(swapped.visibleSlotCount, 3)
-        XCTAssertEqual(swapped.slots[0].app?.displayName, "C")
-        XCTAssertEqual(swapped.slots[2].app?.displayName, "A")
+        XCTAssertEqual(swapped.slots[0].displayName, "C")
+        XCTAssertEqual(swapped.slots[2].displayName, "A")
         XCTAssertEqual(swapped.slots[6], hiddenBefore)
     }
 
@@ -1668,15 +1680,18 @@ final class HoldToLaunchTests: XCTestCase {
         }
     }
 
-    /// A chosen app leaves the middle empty in the gesture entry too.
-    func testGestureCentreStaysEmptyForAChosenApp() {
+    func testGestureCentreBehaviorWithCenterLabelToggle() {
         let ring = geometry()
 
         let icon = ring.iconFrames[1]
         let onApp = hold(world(CGPoint(x: icon.midX, y: icon.midY), in: ring), ring: ring)
-        let appText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch)
-        XCTAssertNil(appText.title, "选中应用时中心不显示名字")
-        XCTAssertNil(appText.action, "选中应用时中心不显示提示")
+        let appShownText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch, showCenterLabel: true)
+        XCTAssertEqual(appShownText.title, "B")
+        XCTAssertNil(appShownText.action)
+
+        let appHiddenText = RingCenter.text(for: onApp, names: names, filled: allFilled, mode: .holdToLaunch, showCenterLabel: false)
+        XCTAssertNil(appHiddenText.title, "关闭开关时中心不显示名字")
+        XCTAssertNil(appHiddenText.action, "关闭开关时中心不显示提示")
 
         var withEmpty = allFilled
         withEmpty[4] = false
@@ -1684,7 +1699,7 @@ final class HoldToLaunchTests: XCTestCase {
         let onEmpty = hold(world(CGPoint(x: emptyFrame.midX, y: emptyFrame.midY), in: ring), ring: ring, filled: withEmpty)
         let emptyText = RingCenter.text(for: onEmpty, names: names, filled: withEmpty, mode: .holdToLaunch)
         XCTAssertEqual(emptyText.title, "空位")
-        XCTAssertNil(emptyText.action, "空位只说明这里没有 app，不该再挂取消文案")
+        XCTAssertNil(emptyText.action, "空位只说明这里没有槽位内容，不该再挂取消文案")
 
         let blank = hold(inRingBlank(ring), ring: ring)
         let blankText = RingCenter.text(for: blank, names: names, filled: allFilled, mode: .holdToLaunch)
@@ -1692,16 +1707,18 @@ final class HoldToLaunchTests: XCTestCase {
         XCTAssertNil(blankText.action)
     }
 
-    /// The menu entry leaves the middle empty for a chosen app as well, and its angular rule
-    /// still decides what a click launches.
-    func testAngularModeLeavesAChosenAppEmpty() {
+    func testAngularModeBehaviorWithCenterLabelToggle() {
         let ring = geometry()
         let outside = CGPoint(x: 15, y: 960)
         let decision = RingPointer.decide(outside, activeScreenFrame: screen, geometry: ring, filled: allFilled)
-        guard case .launch = decision.action else { return XCTFail("菜单入口应可按角度启动") }
-        let text = RingCenter.text(for: decision, names: names, filled: allFilled, mode: .angularClick)
-        XCTAssertNil(text.title, "菜单入口选中应用时中心也不显示名字")
-        XCTAssertNil(text.action, "菜单入口选中应用时中心也不显示提示")
+        guard case .launch(let slotIndex) = decision.action else { return XCTFail("菜单入口应可按角度启动") }
+        let shown = RingCenter.text(for: decision, names: names, filled: allFilled, mode: .angularClick, showCenterLabel: true)
+        XCTAssertEqual(shown.title, names[slotIndex])
+        XCTAssertNil(shown.action)
+
+        let hidden = RingCenter.text(for: decision, names: names, filled: allFilled, mode: .angularClick, showCenterLabel: false)
+        XCTAssertNil(hidden.title, "关闭开关时菜单入口选中槽位中心也不显示名字")
+        XCTAssertNil(hidden.action, "关闭开关时菜单入口选中槽位中心也不显示提示")
     }
 
     /// 3–8 slots must all keep the gesture's icon hit and the angular rule working.
@@ -2231,8 +2248,8 @@ final class EntranceDurationConfigurationTests: XCTestCase {
         let directory = testScratchDirectory().appendingPathComponent("entrance-\(UUID().uuidString)")
         let store = SlotStore(directory: directory)
         var slots = LauncherConfiguration.empty().slots
-        slots[0].app = AppReference(bundleIdentifier: nil, displayName: "A", path: "/Applications/A.app")
-        slots[6].app = AppReference(bundleIdentifier: nil, displayName: "G", path: "/Applications/G.app")
+        slots[0].action = .app(AppReference(bundleIdentifier: nil, displayName: "A", path: "/Applications/A.app"))
+        slots[6].action = .app(AppReference(bundleIdentifier: nil, displayName: "G", path: "/Applications/G.app"))
         let saved = LauncherConfiguration(slots: slots, visibleSlotCount: 5, entranceDurationMilliseconds: 275)
         try store.save(saved)
 
@@ -2240,12 +2257,12 @@ final class EntranceDurationConfigurationTests: XCTestCase {
         XCTAssertEqual(reloaded.entranceDurationMilliseconds, 275)
         XCTAssertEqual(reloaded.visibleSlotCount, 5)
         XCTAssertEqual(reloaded.slots.map(\.id), saved.slots.map(\.id))
-        XCTAssertEqual(reloaded.slots[6].app?.displayName, "G", "隐藏尾部的槽位不能被丢")
+        XCTAssertEqual(reloaded.slots[6].displayName, "G", "隐藏尾部的槽位不能被丢")
 
-        let moved = SlotReordering.moveApp(in: reloaded, from: 0, to: 1)
+        let moved = SlotReordering.moveSlot(in: reloaded, from: 0, to: 1)
         XCTAssertEqual(moved.entranceDurationMilliseconds, 275)
-        XCTAssertEqual(moved.slots[1].app?.displayName, "A")
-        XCTAssertEqual(moved.slots[6].app?.displayName, "G")
+        XCTAssertEqual(moved.slots[1].displayName, "A")
+        XCTAssertEqual(moved.slots[6].displayName, "G")
     }
 
     /// The parser is the field's whole boundary: only an unsigned whole number inside the

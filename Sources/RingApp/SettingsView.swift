@@ -84,11 +84,13 @@ struct SettingsView: View {
         .sheet(item: $model.activePickerTarget) { target in
             QuickAppPickerView(
                 target: target,
-                onSelect: { candidate in
-                    model.assignApp(candidate.toAppReference(), toSlotID: target.slotID)
+                iconProvider: model.iconProvider,
+                metadataFetcher: model.metadataFetcher,
+                onSelectAction: { action in
+                    model.assignAction(action, toSlotID: target.slotID)
                     model.activePickerTarget = nil
                 },
-                onBrowseCustom: {
+                onBrowseCustomApp: {
                     model.activePickerTarget = nil
                     model.chooseAppCustom(forSlotID: target.slotID)
                 },
@@ -156,7 +158,7 @@ private struct RingMainCard: View {
     @State private var suppressNextDurationCancel: Bool = false
 
     private var filledCount: Int {
-        model.visibleSlots.filter { $0.app != nil }.count
+        model.visibleSlots.filter(\.isFilled).count
     }
 
     private var shortTriggerKey: String {
@@ -409,6 +411,7 @@ private struct RingMainCard: View {
     private var preview: some View {
         VStack(spacing: 0) {
             SlotRingPreview(slots: model.visibleSlots,
+                            iconProvider: model.iconProvider,
                             selectedSlotIndex: $selectedSlotIndex,
                             isPreviewAnimating: isPreviewAnimating,
                             clearEnlargementTrigger: clearEnlargementTrigger,
@@ -418,20 +421,20 @@ private struct RingMainCard: View {
                             },
                             onEmptySlotClicked: { index, _ in
                                 selectedSlotIndex = nil
-                                model.chooseApp(at: index)
+                                model.openPicker(at: index)
                             },
                             onEditSlotClicked: { index, _ in
-                                model.chooseApp(at: index)
+                                model.openPicker(at: index)
                             },
                             onDeleteSlotClicked: { index, _ in
-                                model.removeApp(at: index)
+                                model.removeAction(at: index)
                                 if selectedSlotIndex == index {
                                     selectedSlotIndex = nil
                                 }
                                 sanitizeSelection()
                             },
                             onSwapSlots: { source, target in
-                                model.swapApps(at: source, and: target)
+                                model.swapSlots(at: source, and: target)
                                 if let current = selectedSlotIndex {
                                     if current == source {
                                         selectedSlotIndex = target
@@ -457,7 +460,7 @@ private struct RingMainCard: View {
                 Text("·").opacity(0.4)
                 HStack(spacing: 4) {
                     MacKbdText(key: "↵")
-                    Text("更换")
+                    Text("编辑/更换")
                 }
                 Text("·").opacity(0.4)
                 HStack(spacing: 4) {
@@ -484,7 +487,7 @@ private struct RingMainCard: View {
     private func sanitizeSelection() {
         guard let sel = selectedSlotIndex else { return }
         let visible = model.visibleSlots
-        guard visible.indices.contains(sel), visible[sel].app != nil else {
+        guard visible.indices.contains(sel), visible[sel].isFilled else {
             selectedSlotIndex = nil
             return
         }
@@ -686,6 +689,7 @@ struct NativeCleanSlider: NSViewRepresentable {
 
 struct SlotRingPreview: View {
     let slots: [Slot]
+    let iconProvider: SlotIconProvider
     @Binding var selectedSlotIndex: Int?
     var isPreviewAnimating: Bool = false
     var clearEnlargementTrigger: UUID?
@@ -697,6 +701,7 @@ struct SlotRingPreview: View {
     var onSwapSlots: ((Int, Int) -> Void)?
 
     init(slots: [Slot],
+         iconProvider: SlotIconProvider,
          selectedSlotIndex: Binding<Int?>? = nil,
          isPreviewAnimating: Bool = false,
          clearEnlargementTrigger: UUID? = nil,
@@ -707,6 +712,7 @@ struct SlotRingPreview: View {
          onDeleteSlotClicked: ((Int, UUID) -> Void)? = nil,
          onSwapSlots: ((Int, Int) -> Void)? = nil) {
         self.slots = slots
+        self.iconProvider = iconProvider
         self._selectedSlotIndex = selectedSlotIndex ?? .constant(nil)
         self.isPreviewAnimating = isPreviewAnimating
         self.clearEnlargementTrigger = clearEnlargementTrigger
@@ -718,18 +724,28 @@ struct SlotRingPreview: View {
         self.onSwapSlots = onSwapSlots
     }
 
-    private var activeSelectedSlot: (index: Int, slot: Slot, app: AppReference)? {
+    private var activeSelectedSlot: (index: Int, slot: Slot, action: SlotAction)? {
         guard let idx = selectedSlotIndex,
               slots.indices.contains(idx),
-              let app = slots[idx].app else {
+              let action = slots[idx].action else {
             return nil
         }
-        return (idx, slots[idx], app)
+        return (idx, slots[idx], action)
+    }
+
+    private func primaryButtonTitle(for action: SlotAction) -> String {
+        switch action {
+        case .webURL, .file:
+            return "编辑"
+        case .app, .systemAction:
+            return "更换"
+        }
     }
 
     var body: some View {
         ZStack {
             RingPreviewHostRepresentable(slots: slots,
+                                         iconProvider: iconProvider,
                                          selectedSlotIndex: $selectedSlotIndex,
                                          isPreviewAnimating: isPreviewAnimating,
                                          clearEnlargementTrigger: clearEnlargementTrigger,
@@ -752,6 +768,7 @@ struct SlotRingPreview: View {
     @ViewBuilder
     private var centerHub: some View {
         if let selected = activeSelectedSlot {
+            let primaryTitle = primaryButtonTitle(for: selected.action)
             VStack(spacing: 0) {
                 Text("第 \(selected.index + 1) 位")
                     .font(.system(size: 11, weight: .medium))
@@ -759,7 +776,7 @@ struct SlotRingPreview: View {
                     .frame(height: 16)
                     .padding(.bottom, 2)
 
-                Text(selected.app.displayName)
+                Text(selected.action.displayName)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundColor(HTMLSpecs.textColor)
                     .lineLimit(1)
@@ -772,7 +789,7 @@ struct SlotRingPreview: View {
                     Button {
                         onEditSlotClicked?(selected.index, selected.slot.id)
                     } label: {
-                        Text("更换").offset(y: 1)
+                        Text(primaryTitle).offset(y: 1)
                     }
                     .buttonStyle(.plain)
                     .font(.system(size: 11.5, weight: .medium))
@@ -783,8 +800,8 @@ struct SlotRingPreview: View {
                         Capsule()
                             .fill(HTMLSpecs.accentBlue.opacity(0.10))
                     )
-                    .accessibilityLabel("更换应用")
-                    .accessibilityHint("点击选择新应用替换第 \(selected.index + 1) 位")
+                    .accessibilityLabel("\(primaryTitle)槽位")
+                    .accessibilityHint("点击\(primaryTitle)第 \(selected.index + 1) 位内容")
 
                     Button {
                         onDeleteSlotClicked?(selected.index, selected.slot.id)
@@ -800,8 +817,8 @@ struct SlotRingPreview: View {
                         Capsule()
                             .fill(Color.black.opacity(0.05))
                     )
-                    .accessibilityLabel("移除应用")
-                    .accessibilityHint("点击移除第 \(selected.index + 1) 位应用")
+                    .accessibilityLabel("移除槽位")
+                    .accessibilityHint("点击移除第 \(selected.index + 1) 位内容")
                 }
             }
             .frame(width: 128, height: 75)
@@ -813,6 +830,7 @@ struct SlotRingPreview: View {
 
 private struct RingPreviewHostRepresentable: NSViewRepresentable {
     let slots: [Slot]
+    let iconProvider: SlotIconProvider
     @Binding var selectedSlotIndex: Int?
     var isPreviewAnimating: Bool
     var clearEnlargementTrigger: UUID?
@@ -833,6 +851,7 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
 
     func makeNSView(context: Context) -> RingPreviewHostView {
         let view = RingPreviewHostView()
+        view.iconProvider = iconProvider
         previewBridge?.hostView = view
         view.onPreviewAnimatingChanged = onPreviewAnimatingChanged
         view.onEmptySlotClicked = onEmptySlotClicked
@@ -850,6 +869,7 @@ private struct RingPreviewHostRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: RingPreviewHostView, context: Context) {
+        nsView.iconProvider = iconProvider
         previewBridge?.hostView = nsView
         nsView.onPreviewAnimatingChanged = onPreviewAnimatingChanged
         nsView.onEmptySlotClicked = onEmptySlotClicked
@@ -887,11 +907,12 @@ final class RingPreviewHostView: NSView {
     private let targetHighlightLayer = CAShapeLayer()
     private let dragGhostLayer = CALayer()
 
+    var iconProvider: SlotIconProvider?
     private(set) var slots: [Slot] = []
     private(set) var focusedSlotIndex: Int?
     private(set) var hoveredEnlargedSlotIndex: Int?
     private(set) var hoveredEnlargedSlotID: UUID?
-    private(set) var hoveredEnlargedApp: AppReference?
+    private(set) var hoveredEnlargedAction: SlotAction?
     private(set) var isPreviewAnimating: Bool = false
     private var previewState = RingLaunchPreviewState()
     private var pendingHoldWorkItem: DispatchWorkItem?
@@ -1036,25 +1057,25 @@ final class RingPreviewHostView: NSView {
     }
 
     func clearHoverEnlargement(animated: Bool = true) {
-        guard hoveredEnlargedSlotIndex != nil || hoveredEnlargedSlotID != nil || hoveredEnlargedApp != nil else { return }
+        guard hoveredEnlargedSlotIndex != nil || hoveredEnlargedSlotID != nil || hoveredEnlargedAction != nil else { return }
         hoveredEnlargedSlotIndex = nil
         hoveredEnlargedSlotID = nil
-        hoveredEnlargedApp = nil
+        hoveredEnlargedAction = nil
         applyEnlargement(animated: animated)
     }
 
     private func setHoveredEnlargedSlotIndex(_ index: Int?) {
         guard !isDragging, !isPreviewAnimating,
-              let index, slots.indices.contains(index), let app = slots[index].app else {
+              let index, slots.indices.contains(index), let action = slots[index].action else {
             clearHoverEnlargement(animated: true)
             return
         }
-        if hoveredEnlargedSlotIndex == index && hoveredEnlargedSlotID == slots[index].id && hoveredEnlargedApp == app {
+        if hoveredEnlargedSlotIndex == index && hoveredEnlargedSlotID == slots[index].id && hoveredEnlargedAction == action {
             return
         }
         hoveredEnlargedSlotIndex = index
         hoveredEnlargedSlotID = slots[index].id
-        hoveredEnlargedApp = app
+        hoveredEnlargedAction = action
         applyEnlargement(animated: true)
     }
 
@@ -1242,7 +1263,7 @@ final class RingPreviewHostView: NSView {
         super.resetCursorRects()
         discardCursorRects()
         guard !bounds.isEmpty, !isDragging else { return }
-        for i in 0..<slots.count where slots[i].app != nil {
+        for i in 0..<slots.count where slots[i].isFilled {
             let rect = slotHitRect(for: i).intersection(bounds)
             if !rect.isNull && !rect.isEmpty {
                 addCursorRect(rect, cursor: .pointingHand)
@@ -1269,15 +1290,15 @@ final class RingPreviewHostView: NSView {
 
     func update(slots: [Slot]) {
         let slotsChanged = self.slots != slots
-        // 检查当前悬停放大的 slot 是否依然有效（未被删除、未位移、app 未改变）
-        if let id = hoveredEnlargedSlotID, let idx = hoveredEnlargedSlotIndex, let app = hoveredEnlargedApp {
-            if slots.indices.contains(idx) && slots[idx].id == id && slots[idx].app == app {
+        // 检查当前悬停放大的 slot 是否依然有效（未被删除、未位移、动作未改变）
+        if let id = hoveredEnlargedSlotID, let idx = hoveredEnlargedSlotIndex, let action = hoveredEnlargedAction {
+            if slots.indices.contains(idx) && slots[idx].id == id && slots[idx].action == action {
                 // 保持当前悬停放大
             } else {
-                // 槽位被移除、位移或更换了应用，立即清理放大，绝不让另一应用继承
+                // 槽位被移除、位移或更换了动作，立即清理放大，绝不让另一槽位继承
                 hoveredEnlargedSlotIndex = nil
                 hoveredEnlargedSlotID = nil
-                hoveredEnlargedApp = nil
+                hoveredEnlargedAction = nil
             }
         }
         self.slots = slots
@@ -1403,24 +1424,19 @@ final class RingPreviewHostView: NSView {
             slotLayer.masksToBounds = false // 保留外部阴影不被裁剪
             slotLayer.name = "slot_\(i)"
 
-            if i < slots.count, let app = slots[i].app {
-                // 仅设置页环形槽位移除有应用图标背后的外加白方底和选中蓝描边
+            if i < slots.count, let action = slots[i].action {
+                // 仅设置页环形槽位移除有图标背后的外加白方底和选中蓝描边
                 slotLayer.backgroundColor = nil
                 slotLayer.shadowOpacity = 0.0
 
                 let iconLayer = CALayer()
-                iconLayer.frame = CGRect(x: 3, y: 3, width: iconSize - 6, height: iconSize - 6)
+                let innerSide = iconSize - 6
+                iconLayer.frame = CGRect(x: 3, y: 3, width: innerSide, height: innerSide)
                 iconLayer.cornerRadius = 10.0
                 iconLayer.masksToBounds = true
                 iconLayer.contentsScale = scale
-                if FileManager.default.fileExists(atPath: app.path) {
-                    iconLayer.contents = NSWorkspace.shared.icon(forFile: app.path)
-                } else if let bid = app.bundleIdentifier,
-                          let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bid) {
-                    iconLayer.contents = NSWorkspace.shared.icon(forFile: url.path)
-                } else {
-                    iconLayer.contents = Self.makeIdentifiableIcon(name: app.displayName, size: CGSize(width: iconSize - 6, height: iconSize - 6))
-                }
+                let resolver = iconProvider ?? SlotIconProvider(dataDirectory: FileManager.default.homeDirectoryForCurrentUser)
+                iconLayer.contents = resolver.icon(for: action, size: CGSize(width: innerSide, height: innerSide))
                 slotLayer.addSublayer(iconLayer)
             } else {
                 slotLayer.backgroundColor = NSColor(white: 1.0, alpha: 0.40).cgColor
@@ -1437,34 +1453,6 @@ final class RingPreviewHostView: NSView {
             slotsContainerLayer.addSublayer(slotLayer)
         }
         applyEnlargement(animated: false)
-    }
-
-    /// 为未在本地安装的应用生成高清晰度 Squircle 占位图标，杜绝空贴图
-    static func makeIdentifiableIcon(name: String, size: CGSize) -> NSImage {
-        let img = NSImage(size: size)
-        img.lockFocus()
-        let rect = NSRect(origin: .zero, size: size)
-        let path = NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8)
-        let hueIndex = name.utf8.reduce(0) { ($0 * 31 + Int($1)) % 100 }
-        let hue = CGFloat(hueIndex) / 100.0
-        let bg = NSColor(hue: hue, saturation: 0.60, brightness: 0.85, alpha: 1.0)
-        bg.setFill()
-        path.fill()
-
-        let initial = String(name.prefix(1))
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.systemFont(ofSize: size.height * 0.46, weight: .semibold),
-            .foregroundColor: NSColor.white
-        ]
-        let str = NSAttributedString(string: initial, attributes: attrs)
-        let strSize = str.size()
-        let strRect = NSRect(x: (size.width - strSize.width) / 2,
-                             y: (size.height - strSize.height) / 2,
-                             width: strSize.width,
-                             height: strSize.height)
-        str.draw(in: strRect)
-        img.unlockFocus()
-        return img
     }
 
     func pointForSlot(at index: Int) -> NSPoint {
@@ -1507,7 +1495,7 @@ final class RingPreviewHostView: NSView {
         guard bounds.contains(localPoint),
               let index = slotIndex(at: localPoint),
               slots.indices.contains(index),
-              slots[index].app != nil else {
+              slots[index].isFilled else {
             return false
         }
         return true
@@ -1571,8 +1559,8 @@ final class RingPreviewHostView: NSView {
             return
         }
 
-        // 仅设置页环形槽位移除有应用图标背后的外加白方底和选中蓝描边
-        if slots[idx].app != nil {
+        // 仅设置页环形槽位移除有图标背后的外加白方底和选中蓝描边
+        if slots[idx].isFilled {
             focusHighlightLayer.isHidden = true
             return
         }
@@ -1651,14 +1639,14 @@ final class RingPreviewHostView: NSView {
             updateFocusAndHub()
         case 36, 76, 49: // Return / Enter / Space
             if let idx = focusedSlotIndex, slots.indices.contains(idx) {
-                if slots[idx].app != nil {
+                if slots[idx].isFilled {
                     onEditSlotClicked?(idx, slots[idx].id)
                 } else {
                     onEmptySlotClicked?(idx, slots[idx].id)
                 }
             }
         case 51, 117: // Backspace / Delete
-            if let idx = focusedSlotIndex, slots.indices.contains(idx), slots[idx].app != nil {
+            if let idx = focusedSlotIndex, slots.indices.contains(idx), slots[idx].isFilled {
                 onDeleteSlotClicked?(idx, slots[idx].id)
             }
         default:
@@ -1676,7 +1664,7 @@ final class RingPreviewHostView: NSView {
 
     private func hoveredFilledIconIndex(at localPoint: NSPoint) -> Int? {
         guard !isDragging, !isPreviewAnimating, bounds.contains(localPoint) else { return nil }
-        for i in 0..<slots.count where slots[i].app != nil {
+        for i in 0..<slots.count where slots[i].isFilled {
             if iconHitRect(for: i).contains(localPoint) {
                 return i
             }
@@ -1732,7 +1720,7 @@ final class RingPreviewHostView: NSView {
             let now = ProcessInfo.processInfo.systemUptime
             // 严格同一槽位双击校验，彻底避免跨槽快速点击误触发双击
             if event.clickCount == 2 && lastClickedSlotIndex == clicked {
-                if slots[clicked].app != nil {
+                if slots[clicked].isFilled {
                     onEditSlotClicked?(clicked, slots[clicked].id)
                 } else {
                     onSelectedSlotChanged?(nil)
@@ -1758,7 +1746,7 @@ final class RingPreviewHostView: NSView {
         // 空槽直接守卫，不激活拖拽状态
         guard let source = dragCandidateIndex,
               slots.indices.contains(source),
-              slots[source].app != nil else { return }
+              slots[source].isFilled else { return }
         let localPoint = convert(event.locationInWindow, from: nil)
 
         if !isDragging {
@@ -1767,12 +1755,9 @@ final class RingPreviewHostView: NSView {
                 isDragging = true
                 clearHoverEnlargement(animated: false)
                 focusHighlightLayer.isHidden = true
-                if let app = slots[source].app {
-                    if FileManager.default.fileExists(atPath: app.path) {
-                        dragGhostLayer.contents = NSWorkspace.shared.icon(forFile: app.path)
-                    } else {
-                        dragGhostLayer.contents = Self.makeIdentifiableIcon(name: app.displayName, size: CGSize(width: 52, height: 52))
-                    }
+                if let action = slots[source].action {
+                    let resolver = iconProvider ?? SlotIconProvider(dataDirectory: FileManager.default.homeDirectoryForCurrentUser)
+                    dragGhostLayer.contents = resolver.icon(for: action, size: CGSize(width: 52, height: 52))
                 }
                 dragGhostLayer.frame = CGRect(x: localPoint.x - 26, y: localPoint.y - 26, width: 52, height: 52)
                 dragGhostLayer.isHidden = false
@@ -1829,7 +1814,7 @@ final class RingPreviewHostView: NSView {
 
         // 仅主动点击已填槽图标才选中并在中央显示详情（不维持放大）；空槽点击清空选中并直启选择器
         if let clicked = pendingClickSlotIndex, clicked == slotIndex(at: localPoint) {
-            if slots[clicked].app != nil {
+            if slots[clicked].isFilled {
                 if iconHitRect(for: clicked).contains(localPoint) {
                     onSelectedSlotChanged?(clicked)
                 } else {
@@ -1953,9 +1938,12 @@ final class SettingsModel: ObservableObject {
     @Published var entranceDurationText: String
     @Published var entranceDurationError: String?
     @Published var hapticFeedbackEnabled: Bool
+    @Published var showCenterLabelOnHover: Bool
     @Published var lastError: String?
     @Published var activePickerTarget: PickerTarget?
 
+    let iconProvider: SlotIconProvider
+    let metadataFetcher: WebMetadataFetcher
     private let store: SlotStore
     private var config: LauncherConfiguration
     var onConfigChange: ((LauncherConfiguration) -> Void)?
@@ -1967,7 +1955,10 @@ final class SettingsModel: ObservableObject {
         self.entranceDurationMilliseconds = self.config.entranceDurationMilliseconds
         self.entranceDurationText = String(self.config.entranceDurationMilliseconds)
         self.hapticFeedbackEnabled = self.config.hapticFeedbackEnabled
+        self.showCenterLabelOnHover = self.config.showCenterLabelOnHover
         self.store = store
+        self.iconProvider = SlotIconProvider(dataDirectory: store.directory)
+        self.metadataFetcher = WebMetadataFetcher(dataDirectory: store.directory)
     }
 
     var visibleSlots: [Slot] {
@@ -1982,14 +1973,14 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
-    func chooseApp(at index: Int) {
+    func openPicker(at index: Int) {
         guard visibleSlots.indices.contains(index) else { return }
         let slot = visibleSlots[index]
-        activePickerTarget = PickerTarget(slotID: slot.id, slotIndex: index)
+        activePickerTarget = PickerTarget(slotID: slot.id, slotIndex: index, initialAction: slot.action)
     }
 
-    func assignApp(_ reference: AppReference, toSlotID targetSlotID: UUID) {
-        let updated = QuickAppWriter.apply(reference: reference, toSlotID: targetSlotID, in: config)
+    func assignAction(_ action: SlotAction, toSlotID targetSlotID: UUID) {
+        let updated = SlotActionWriter.apply(action: action, toSlotID: targetSlotID, in: config)
         guard updated != config else { return }
         slots = updated.slots
         commit()
@@ -2011,16 +2002,16 @@ final class SettingsModel: ObservableObject {
         let reference = AppReference(bundleIdentifier: bundle?.bundleIdentifier,
                                      displayName: FileManager.default.displayName(atPath: url.path),
                                      path: url.path)
-        assignApp(reference, toSlotID: targetSlotID)
+        assignAction(.app(reference), toSlotID: targetSlotID)
     }
 
-    func removeApp(at index: Int) {
+    func removeAction(at index: Int) {
         guard visibleSlots.indices.contains(index) else { return }
-        slots[index].app = nil
+        slots[index].action = nil
         commit()
     }
 
-    func swapApps(at sourceIndex: Int, and targetIndex: Int) {
+    func swapSlots(at sourceIndex: Int, and targetIndex: Int) {
         let updated = RingPreviewSlotSwap.swap(in: config, source: sourceIndex, destination: targetIndex)
         guard updated != config else { return }
         slots = updated.slots
@@ -2053,6 +2044,12 @@ final class SettingsModel: ObservableObject {
         commit()
     }
 
+    func setShowCenterLabelOnHover(_ enabled: Bool) {
+        guard enabled != showCenterLabelOnHover else { return }
+        showCenterLabelOnHover = enabled
+        commit()
+    }
+
     func save() {
         commit()
     }
@@ -2075,12 +2072,14 @@ final class SettingsModel: ObservableObject {
         updated.visibleSlotCount = visibleSlotCount
         updated.entranceDurationMilliseconds = entranceDurationMilliseconds
         updated.hapticFeedbackEnabled = hapticFeedbackEnabled
+        updated.showCenterLabelOnHover = showCenterLabelOnHover
         do {
             let normalized = updated.normalized()
             try store.save(normalized)
             config = normalized
             slots = normalized.slots
             hapticFeedbackEnabled = normalized.hapticFeedbackEnabled
+            showCenterLabelOnHover = normalized.showCenterLabelOnHover
             entranceDurationMilliseconds = normalized.entranceDurationMilliseconds
             entranceDurationText = String(normalized.entranceDurationMilliseconds)
             lastError = nil
@@ -2091,6 +2090,7 @@ final class SettingsModel: ObservableObject {
             entranceDurationMilliseconds = config.entranceDurationMilliseconds
             entranceDurationText = String(entranceDurationMilliseconds)
             hapticFeedbackEnabled = config.hapticFeedbackEnabled
+            showCenterLabelOnHover = config.showCenterLabelOnHover
             lastError = "未保存：\(error.localizedDescription)"
         }
     }

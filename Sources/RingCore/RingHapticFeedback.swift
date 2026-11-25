@@ -37,7 +37,7 @@ public struct RingHapticFeedbackState: Equatable, Sendable {
         let targetSlot: Int?
         if let slot = decision?.slot,
            slots.indices.contains(slot),
-           slots[slot].app != nil {
+           slots[slot].isFilled {
             targetSlot = slot
         } else {
             targetSlot = nil

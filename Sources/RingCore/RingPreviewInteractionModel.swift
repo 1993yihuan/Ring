@@ -84,7 +84,7 @@ public enum RingPreviewLayoutHelper {
                                activeHoverSlot: Int? = nil,
                                buttonDiameter: CGFloat = defaultButtonDiameter) -> RingPreviewHitTarget {
         // First check currently active hovered slot so moving to edge buttons never flickers
-        if let active = activeHoverSlot, slots.indices.contains(active), slots[active].app != nil {
+        if let active = activeHoverSlot, slots.indices.contains(active), slots[active].isFilled {
             let slotGeom = slotGeometry(for: active, in: geometry, buttonDiameter: buttonDiameter)
             if slotGeom.hoverFrame.contains(localPoint) {
                 if slotGeom.editButtonFrame.contains(localPoint) {
@@ -100,7 +100,7 @@ public enum RingPreviewLayoutHelper {
         // Iterate visible slots
         for index in 0..<min(geometry.iconFrames.count, slots.count) {
             let slot = slots[index]
-            if slot.app == nil {
+            if !slot.isFilled {
                 // Empty slot plus well click
                 let frame = geometry.iconFrames[index]
                 if frame.contains(localPoint) {
@@ -180,18 +180,19 @@ public enum RingPreviewSlotSwap {
         }
 
         // Source must be occupied
-        guard let sourceApp = slots[sourceIndex].app else {
+        guard let sourceAction = slots[sourceIndex].action else {
             return normalized
         }
 
-        let destApp = slots[destIndex].app
-        slots[sourceIndex].app = destApp
-        slots[destIndex].app = sourceApp
+        let destAction = slots[destIndex].action
+        slots[sourceIndex].action = destAction
+        slots[destIndex].action = sourceAction
 
         return LauncherConfiguration(version: normalized.version,
                                      slots: slots,
                                      visibleSlotCount: normalized.visibleSlotCount,
                                      entranceDurationMilliseconds: normalized.entranceDurationMilliseconds,
-                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled)
+                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled,
+                                     showCenterLabelOnHover: normalized.showCenterLabelOnHover)
     }
 }

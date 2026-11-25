@@ -52,8 +52,8 @@ final class HapticFeedbackConfigurationTests: XCTestCase {
             let appA = AppReference(bundleIdentifier: "com.example.A", displayName: "AppA", path: "/Applications/AppA.app")
             let appB = AppReference(bundleIdentifier: "com.example.B", displayName: "AppB", path: "/Applications/AppB.app")
             let appC = AppReference(bundleIdentifier: "com.example.C", displayName: "AppC", path: "/Applications/AppC.app")
-            slots[0].app = appA
-            slots[1].app = appB
+            slots[0].action = .app(appA)
+            slots[1].action = .app(appB)
 
             let initial = LauncherConfiguration(slots: slots,
                                                 visibleSlotCount: 6,
@@ -63,7 +63,7 @@ final class HapticFeedbackConfigurationTests: XCTestCase {
             let normalized = initial.normalized()
             XCTAssertEqual(normalized.hapticFeedbackEnabled, enabled)
 
-            let reordered = SlotReordering.moveApp(in: initial, from: 0, to: 1)
+            let reordered = SlotReordering.moveSlot(in: initial, from: 0, to: 1)
             XCTAssertEqual(reordered.hapticFeedbackEnabled, enabled)
             XCTAssertEqual(reordered.entranceDurationMilliseconds, 320)
             XCTAssertEqual(reordered.visibleSlotCount, 6)
@@ -71,9 +71,9 @@ final class HapticFeedbackConfigurationTests: XCTestCase {
             let swapped = RingPreviewSlotSwap.swap(in: initial, source: 0, destination: 2)
             XCTAssertEqual(swapped.hapticFeedbackEnabled, enabled)
 
-            let quickApplied = QuickAppWriter.apply(reference: appC,
-                                                    toSlotID: initial.slots[2].id,
-                                                    in: initial)
+            let quickApplied = SlotActionWriter.apply(action: .app(appC),
+                                                      toSlotID: initial.slots[2].id,
+                                                      in: initial)
             XCTAssertEqual(quickApplied.hapticFeedbackEnabled, enabled)
         }
     }
@@ -98,10 +98,10 @@ final class HapticFeedbackConfigurationTests: XCTestCase {
 final class RingHapticFeedbackStateTests: XCTestCase {
     private func makeSlots() -> [Slot] {
         var slots = LauncherConfiguration.empty(visibleSlotCount: 4).visibleSlots
-        slots[0].app = AppReference(bundleIdentifier: "com.example.0", displayName: "Zero", path: "/Applications/Zero.app")
+        slots[0].action = .app(AppReference(bundleIdentifier: "com.example.0", displayName: "Zero", path: "/Applications/Zero.app"))
         // slot 1 intentionally empty
-        slots[2].app = AppReference(bundleIdentifier: "com.example.2", displayName: "Two", path: "/Applications/Two.app")
-        slots[3].app = AppReference(bundleIdentifier: "com.example.3", displayName: "Three", path: "/Applications/Three.app")
+        slots[2].action = .app(AppReference(bundleIdentifier: "com.example.2", displayName: "Two", path: "/Applications/Two.app"))
+        slots[3].action = .app(AppReference(bundleIdentifier: "com.example.3", displayName: "Three", path: "/Applications/Three.app"))
         return slots
     }
 
@@ -190,8 +190,8 @@ final class RingHapticFeedbackStateTests: XCTestCase {
                                            screens: [screen],
                                            visibleFrames: [screen])!
         var slots = makeSlots()
-        slots[1].app = AppReference(bundleIdentifier: "com.example.1", displayName: "One", path: "/Applications/One.app")
-        let filled = slots.map { $0.app != nil }
+        slots[1].action = .app(AppReference(bundleIdentifier: "com.example.1", displayName: "One", path: "/Applications/One.app"))
+        let filled = slots.map(\.isFilled)
 
         let icon0Center = CGPoint(x: geometry.panelFrame.minX + geometry.iconFrames[0].midX,
                                   y: geometry.panelFrame.minY + geometry.iconFrames[0].midY)

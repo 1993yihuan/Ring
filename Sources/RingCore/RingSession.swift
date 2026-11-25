@@ -8,7 +8,12 @@ public enum RingPhase: Sendable, Equatable {
 
 public struct LaunchRequest: Sendable, Equatable {
     public let slotID: UUID
-    public let reference: AppReference
+    public let action: SlotAction
+
+    public init(slotID: UUID, action: SlotAction) {
+        self.slotID = slotID
+        self.action = action
+    }
 }
 
 public enum SlotClickOutcome: Sendable, Equatable {
@@ -75,11 +80,11 @@ public final class RingSession {
                 phase = .hidden
                 return .emptySlot
             }
-            guard let reference = config.slots[index].app else {
+            guard let action = config.slots[index].action else {
                 phase = .hidden
                 return .emptySlot
             }
-            let request = LaunchRequest(slotID: config.slots[index].id, reference: reference)
+            let request = LaunchRequest(slotID: config.slots[index].id, action: action)
             phase = .launching(request.slotID)
             launchCount += 1
             return .launch(request)
@@ -91,18 +96,16 @@ public final class RingSession {
         lastError = message
     }
 
-    public func setApp(_ reference: AppReference?, at index: Int) {
+    public func setAction(_ action: SlotAction?, at index: Int) {
         guard index >= 0, index < config.visibleSlotCount, config.slots.indices.contains(index) else { return }
-        config.slots[index].app = reference
+        config.slots[index].action = action
     }
 }
 
 public enum SlotReordering {
-    /// Moves an app between slots, leaving the vacated slot empty. Slot ids stay put
-    /// so a remembered position never starts a different app.
-    /// Swaps two *visible* apps. Hidden slots are never involved and the visible count is
-    /// carried through, so a rebuild cannot silently reset the configuration to eight.
-    public static func moveApp(in config: LauncherConfiguration, from source: Int, to destination: Int) -> LauncherConfiguration {
+    /// Swaps two *visible* slot actions, keeping slot ids put. Hidden slots are never
+    /// involved and every configuration preference is carried through.
+    public static func moveSlot(in config: LauncherConfiguration, from source: Int, to destination: Int) -> LauncherConfiguration {
         let normalized = config.normalized()
         var slots = normalized.slots
         guard source >= 0, destination >= 0,
@@ -111,14 +114,13 @@ public enum SlotReordering {
               source != destination else {
             return normalized
         }
-        let moved = slots[source].app
-        slots[source].app = slots[destination].app
-        slots[destination].app = moved
-        // Every field of the configuration travels with a reorder, not only the slots: a
-        // rebuild here once dropped everything the initialiser did not name.
+        let moved = slots[source].action
+        slots[source].action = slots[destination].action
+        slots[destination].action = moved
         return LauncherConfiguration(slots: slots,
                                      visibleSlotCount: normalized.visibleSlotCount,
                                      entranceDurationMilliseconds: normalized.entranceDurationMilliseconds,
-                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled)
+                                     hapticFeedbackEnabled: normalized.hapticFeedbackEnabled,
+                                     showCenterLabelOnHover: normalized.showCenterLabelOnHover)
     }
 }

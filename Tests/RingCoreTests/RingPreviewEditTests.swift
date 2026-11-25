@@ -9,11 +9,11 @@ final class RingPreviewEditTests: XCTestCase {
         let geometry = RingLayout.geometry(slotCount: 5, side: side, panelOrigin: .zero)
         let app1 = AppReference(bundleIdentifier: "b1", displayName: "App1", path: "/Applications/App1.app")
         let slots = [
-            Slot(id: UUID(), app: app1),
-            Slot(id: UUID(), app: nil),
-            Slot(id: UUID(), app: nil),
-            Slot(id: UUID(), app: nil),
-            Slot(id: UUID(), app: nil)
+            Slot(id: UUID(), action: .app(app1)),
+            Slot(id: UUID(), action: nil),
+            Slot(id: UUID(), action: nil),
+            Slot(id: UUID(), action: nil),
+            Slot(id: UUID(), action: nil)
         ]
 
         let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: 0, in: geometry)
@@ -72,8 +72,8 @@ final class RingPreviewEditTests: XCTestCase {
         let geometry = RingLayout.geometry(slotCount: 4, side: side, panelOrigin: .zero)
         let app = AppReference(bundleIdentifier: "b", displayName: "App", path: "/a.app")
         let slots = [
-            Slot(id: UUID(), app: app),
-            Slot(id: UUID(), app: nil)
+            Slot(id: UUID(), action: .app(app)),
+            Slot(id: UUID(), action: nil)
         ]
 
         let slotGeom = RingPreviewLayoutHelper.slotGeometry(for: 0, in: geometry)
@@ -100,10 +100,10 @@ final class RingPreviewEditTests: XCTestCase {
         let geometry = RingLayout.geometry(slotCount: 4, side: side, panelOrigin: .zero)
         let app = AppReference(bundleIdentifier: "b", displayName: "App", path: "/a.app")
         let slots = [
-            Slot(id: UUID(), app: app), // slot 0 occupied
-            Slot(id: UUID(), app: nil), // slot 1 empty
-            Slot(id: UUID(), app: nil),
-            Slot(id: UUID(), app: nil)
+            Slot(id: UUID(), action: .app(app)), // slot 0 occupied
+            Slot(id: UUID(), action: nil), // slot 1 empty
+            Slot(id: UUID(), action: nil),
+            Slot(id: UUID(), action: nil)
         ]
 
         // Clicking directly in empty slot 1's frame always yields .emptySlot(1) even if near slot 0
@@ -125,14 +125,14 @@ final class RingPreviewEditTests: XCTestCase {
         let hiddenApp6 = AppReference(bundleIdentifier: "b6", displayName: "Hidden6", path: "/Applications/Hidden6.app")
 
         let slots = [
-            Slot(id: id1, app: app1), // index 0 (Slot 1)
-            Slot(id: id2, app: app2), // index 1 (Slot 2)
-            Slot(id: id3, app: app3), // index 2 (Slot 3)
-            Slot(id: id4, app: app4), // index 3 (Slot 4)
-            Slot(id: id5, app: app5), // index 4 (Slot 5)
-            Slot(id: id6, app: hiddenApp6), // index 5 (Hidden)
-            Slot(id: id7, app: nil),
-            Slot(id: id8, app: nil)
+            Slot(id: id1, action: .app(app1)), // index 0 (Slot 1)
+            Slot(id: id2, action: .app(app2)), // index 1 (Slot 2)
+            Slot(id: id3, action: .app(app3)), // index 2 (Slot 3)
+            Slot(id: id4, action: .app(app4)), // index 3 (Slot 4)
+            Slot(id: id5, action: .app(app5)), // index 4 (Slot 5)
+            Slot(id: id6, action: .app(hiddenApp6)), // index 5 (Hidden)
+            Slot(id: id7, action: nil),
+            Slot(id: id8, action: nil)
         ]
 
         let initialConfig = LauncherConfiguration(slots: slots, visibleSlotCount: 5).normalized()
@@ -142,29 +142,29 @@ final class RingPreviewEditTests: XCTestCase {
 
         // Slot 1 (index 0) must now hold App4, with its original id1
         XCTAssertEqual(swappedConfig.slots[0].id, id1)
-        XCTAssertEqual(swappedConfig.slots[0].app?.displayName, "App4")
+        XCTAssertEqual(swappedConfig.slots[0].displayName, "App4")
 
         // Slot 4 (index 3) must now hold App1, with its original id4
         XCTAssertEqual(swappedConfig.slots[3].id, id4)
-        XCTAssertEqual(swappedConfig.slots[3].app?.displayName, "App1")
+        XCTAssertEqual(swappedConfig.slots[3].displayName, "App1")
 
         // Intermediate slots 2 & 3 must remain untouched
         XCTAssertEqual(swappedConfig.slots[1].id, id2)
-        XCTAssertEqual(swappedConfig.slots[1].app?.displayName, "App2")
+        XCTAssertEqual(swappedConfig.slots[1].displayName, "App2")
         XCTAssertEqual(swappedConfig.slots[2].id, id3)
-        XCTAssertEqual(swappedConfig.slots[2].app?.displayName, "App3")
+        XCTAssertEqual(swappedConfig.slots[2].displayName, "App3")
 
         // Slot 5 must remain untouched
         XCTAssertEqual(swappedConfig.slots[4].id, id5)
-        XCTAssertEqual(swappedConfig.slots[4].app?.displayName, "App5")
+        XCTAssertEqual(swappedConfig.slots[4].displayName, "App5")
 
         // Hidden tail (6..8) must remain untouched
         XCTAssertEqual(swappedConfig.slots[5].id, id6)
-        XCTAssertEqual(swappedConfig.slots[5].app?.displayName, "Hidden6")
+        XCTAssertEqual(swappedConfig.slots[5].displayName, "Hidden6")
         XCTAssertEqual(swappedConfig.slots[6].id, id7)
-        XCTAssertNil(swappedConfig.slots[6].app)
+        XCTAssertNil(swappedConfig.slots[6].action)
         XCTAssertEqual(swappedConfig.slots[7].id, id8)
-        XCTAssertNil(swappedConfig.slots[7].app)
+        XCTAssertNil(swappedConfig.slots[7].action)
 
         XCTAssertEqual(swappedConfig.visibleSlotCount, 5)
     }
@@ -174,9 +174,9 @@ final class RingPreviewEditTests: XCTestCase {
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "App2", path: "/2.app")
         let id0 = UUID(), id1 = UUID(), id2 = UUID()
         let slots = [
-            Slot(id: id0, app: app1),
-            Slot(id: id1, app: nil), // empty slot
-            Slot(id: id2, app: app2)
+            Slot(id: id0, action: .app(app1)),
+            Slot(id: id1, action: nil), // empty slot
+            Slot(id: id2, action: .app(app2))
         ]
         let config = LauncherConfiguration(slots: slots, visibleSlotCount: 3).normalized()
         let geometry = RingLayout.geometry(slotCount: 3, side: 280, panelOrigin: .zero)
@@ -200,19 +200,19 @@ final class RingPreviewEditTests: XCTestCase {
         // 5. Move occupied slot 0 to empty slot 1: slot 1 gets App1, slot 0 becomes nil, IDs preserved
         let movedToEmpty = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 1)
         XCTAssertEqual(movedToEmpty.slots[0].id, id0)
-        XCTAssertNil(movedToEmpty.slots[0].app, "原槽位必须变为空位")
+        XCTAssertNil(movedToEmpty.slots[0].action, "原槽位必须变为空位")
         XCTAssertEqual(movedToEmpty.slots[1].id, id1)
-        XCTAssertEqual(movedToEmpty.slots[1].app?.displayName, "App1", "空位目标必须获得移动的应用")
+        XCTAssertEqual(movedToEmpty.slots[1].displayName, "App1", "空位目标必须获得移动的应用")
         XCTAssertEqual(movedToEmpty.slots[2].id, id2)
-        XCTAssertEqual(movedToEmpty.slots[2].app?.displayName, "App2", "其余槽位保持不变")
+        XCTAssertEqual(movedToEmpty.slots[2].displayName, "App2", "其余槽位保持不变")
 
         // 6. Swap occupied slot 0 with occupied slot 2: both apps swapped
         let swappedOccupied = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 2)
         XCTAssertEqual(swappedOccupied.slots[0].id, id0)
-        XCTAssertEqual(swappedOccupied.slots[0].app?.displayName, "App2")
+        XCTAssertEqual(swappedOccupied.slots[0].displayName, "App2")
         XCTAssertEqual(swappedOccupied.slots[2].id, id2)
-        XCTAssertEqual(swappedOccupied.slots[2].app?.displayName, "App1")
-        XCTAssertNil(swappedOccupied.slots[1].app)
+        XCTAssertEqual(swappedOccupied.slots[2].displayName, "App1")
+        XCTAssertNil(swappedOccupied.slots[1].action)
 
         // 7. RingPreviewSlotSwap refuses dragging from an empty source slot
         let dragFromEmpty = RingPreviewSlotSwap.swap(in: config, source: 1, destination: 2)
@@ -229,7 +229,7 @@ final class RingPreviewEditTests: XCTestCase {
 
     func testDifferentPreviewDimensionsScaleAccurately() {
         let app = AppReference(bundleIdentifier: "b", displayName: "App", path: "/a.app")
-        let slots = [Slot(id: UUID(), app: app)]
+        let slots = [Slot(id: UUID(), action: .app(app))]
 
         for testSide in [200.0, 260.0, 320.0, 400.0] as [CGFloat] {
             let geometry = RingLayout.geometry(slotCount: 1, side: testSide, panelOrigin: .zero)
@@ -265,7 +265,7 @@ final class RingPreviewEditTests: XCTestCase {
         let app1 = AppReference(bundleIdentifier: "b1", displayName: "First", path: "/First.app")
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "Second", path: "/Second.app")
 
-        let config = LauncherConfiguration(slots: [Slot(id: id1, app: app1), Slot(id: id2, app: app2)],
+        let config = LauncherConfiguration(slots: [Slot(id: id1, action: .app(app1)), Slot(id: id2, action: .app(app2))],
                                            visibleSlotCount: 4).normalized()
         try store.save(config)
 
@@ -275,9 +275,9 @@ final class RingPreviewEditTests: XCTestCase {
 
         let reloaded = try store.load()
         XCTAssertEqual(reloaded.slots[0].id, id1)
-        XCTAssertEqual(reloaded.slots[0].app?.displayName, "Second")
+        XCTAssertEqual(reloaded.slots[0].displayName, "Second")
         XCTAssertEqual(reloaded.slots[1].id, id2)
-        XCTAssertEqual(reloaded.slots[1].app?.displayName, "First")
+        XCTAssertEqual(reloaded.slots[1].displayName, "First")
     }
 
     func testMoveToEmptyAndSaveRoundTrip() throws {
@@ -290,10 +290,10 @@ final class RingPreviewEditTests: XCTestCase {
         let hiddenApp = AppReference(bundleIdentifier: "b4", displayName: "HiddenApp", path: "/Hidden.app")
 
         let config = LauncherConfiguration(slots: [
-            Slot(id: id1, app: app1),
-            Slot(id: id2, app: nil),
-            Slot(id: id3, app: nil),
-            Slot(id: id4, app: hiddenApp)
+            Slot(id: id1, action: .app(app1)),
+            Slot(id: id2, action: nil),
+            Slot(id: id3, action: nil),
+            Slot(id: id4, action: .app(hiddenApp))
         ], visibleSlotCount: 3).normalized()
         try store.save(config)
 
@@ -305,15 +305,15 @@ final class RingPreviewEditTests: XCTestCase {
         let reloaded = try store.load()
         // Slot 0 is now empty, retains id1
         XCTAssertEqual(reloaded.slots[0].id, id1)
-        XCTAssertNil(reloaded.slots[0].app)
+        XCTAssertNil(reloaded.slots[0].action)
         // Slot 1 now holds First, retains id2
         XCTAssertEqual(reloaded.slots[1].id, id2)
-        XCTAssertEqual(reloaded.slots[1].app?.displayName, "First")
+        XCTAssertEqual(reloaded.slots[1].displayName, "First")
         // Slot 2 untouched
         XCTAssertEqual(reloaded.slots[2].id, id3)
-        XCTAssertNil(reloaded.slots[2].app)
+        XCTAssertNil(reloaded.slots[2].action)
         // Slot 3 (hidden tail) untouched
         XCTAssertEqual(reloaded.slots[3].id, id4)
-        XCTAssertEqual(reloaded.slots[3].app?.displayName, "HiddenApp")
+        XCTAssertEqual(reloaded.slots[3].displayName, "HiddenApp")
     }
 }

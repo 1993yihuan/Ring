@@ -339,6 +339,33 @@ struct GeneralSettingsPage: View {
                             .tint(HTMLSpecs.accentBlue)
                             .accessibilityLabel("触控板轻微震动反馈")
                         }
+
+                        Rectangle()
+                            .fill(Color.black.opacity(0.06))
+                            .frame(height: 1)
+
+                        HStack(alignment: .center) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text("悬停时在环心显示名称")
+                                    .font(.system(size: 13.5, weight: .medium))
+                                    .foregroundColor(HTMLSpecs.textColor)
+                                Text("悬停任意已配置槽位（应用、网址、文件或快捷功能）时在环心显示名称")
+                                    .font(.system(size: 12))
+                                    .foregroundColor(Color.black.opacity(0.50))
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 16)
+                            Toggle(isOn: Binding(
+                                get: { model.showCenterLabelOnHover },
+                                set: { model.setShowCenterLabelOnHover($0) }
+                            )) {
+                                Text("悬停时在环心显示名称")
+                            }
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .tint(HTMLSpecs.accentBlue)
+                            .accessibilityLabel("悬停时在环心显示名称")
+                        }
                     }
                 }
             }

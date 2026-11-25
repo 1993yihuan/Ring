@@ -71,9 +71,9 @@ final class SettingsRedesignTests: XCTestCase {
         let app8 = AppReference(bundleIdentifier: "com.apple.Notes", displayName: "Notes", path: "/Applications/Notes.app")
 
         var config = LauncherConfiguration.empty()
-        config.slots[0].app = app1
-        config.slots[3].app = app4
-        config.slots[7].app = app8
+        config.slots[0].action = .app(app1)
+        config.slots[3].action = .app(app4)
+        config.slots[7].action = .app(app8)
         config.visibleSlotCount = 8
         try store.save(config)
 
@@ -85,12 +85,12 @@ final class SettingsRedesignTests: XCTestCase {
         let reloadedLowered = try store.load()
         XCTAssertEqual(reloadedLowered.visibleSlotCount, 4)
         XCTAssertEqual(reloadedLowered.visibleSlots.count, 4)
-        XCTAssertEqual(reloadedLowered.visibleSlots[0].app?.displayName, "Safari")
-        XCTAssertEqual(reloadedLowered.visibleSlots[3].app?.displayName, "Terminal")
+        XCTAssertEqual(reloadedLowered.visibleSlots[0].displayName, "Safari")
+        XCTAssertEqual(reloadedLowered.visibleSlots[3].displayName, "Terminal")
         // Notes at slot 7 is hidden from visibleSlots
-        XCTAssertFalse(reloadedLowered.visibleSlots.contains(where: { $0.app?.displayName == "Notes" }))
+        XCTAssertFalse(reloadedLowered.visibleSlots.contains(where: { $0.displayName == "Notes" }))
         // But the full 8 slots still preserve Notes
-        XCTAssertEqual(reloadedLowered.slots[7].app?.displayName, "Notes")
+        XCTAssertEqual(reloadedLowered.slots[7].displayName, "Notes")
 
         // Restore visible count back to 8
         var restored = reloadedLowered
@@ -100,7 +100,7 @@ final class SettingsRedesignTests: XCTestCase {
         let reloadedRestored = try store.load()
         XCTAssertEqual(reloadedRestored.visibleSlotCount, 8)
         XCTAssertEqual(reloadedRestored.visibleSlots.count, 8)
-        XCTAssertEqual(reloadedRestored.visibleSlots[7].app?.displayName, "Notes")
+        XCTAssertEqual(reloadedRestored.visibleSlots[7].displayName, "Notes")
     }
 
     // MARK: - 3. Entrance Duration Range and Validation (0..2000 ms)
@@ -147,16 +147,16 @@ final class SettingsRedesignTests: XCTestCase {
         var config = LauncherConfiguration.empty()
         let id0 = config.slots[0].id
         let id1 = config.slots[1].id
-        config.slots[0].app = app1
-        config.slots[1].app = app2
+        config.slots[0].action = .app(app1)
+        config.slots[1].action = .app(app2)
 
         let swapped = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 1)
         // IDs are preserved
         XCTAssertEqual(swapped.slots[0].id, id0)
         XCTAssertEqual(swapped.slots[1].id, id1)
         // Apps are swapped
-        XCTAssertEqual(swapped.slots[0].app, app2)
-        XCTAssertEqual(swapped.slots[1].app, app1)
+        XCTAssertEqual(swapped.slots[0].action, .app(app2))
+        XCTAssertEqual(swapped.slots[1].action, .app(app1))
     }
 
     func testOccupiedToEmptyMovesApplication() {
@@ -164,20 +164,20 @@ final class SettingsRedesignTests: XCTestCase {
         var config = LauncherConfiguration.empty()
         let id0 = config.slots[0].id
         let id1 = config.slots[1].id
-        config.slots[0].app = app1
-        config.slots[1].app = nil
+        config.slots[0].action = .app(app1)
+        config.slots[1].action = nil
 
         let moved = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 1)
         XCTAssertEqual(moved.slots[0].id, id0)
         XCTAssertEqual(moved.slots[1].id, id1)
-        XCTAssertNil(moved.slots[0].app)
-        XCTAssertEqual(moved.slots[1].app, app1)
+        XCTAssertNil(moved.slots[0].action)
+        XCTAssertEqual(moved.slots[1].action, .app(app1))
     }
 
     func testDragToSelfOrEmptySourceOrOutOfBoundsIsRefused() {
         let app1 = AppReference(bundleIdentifier: "b1", displayName: "App1", path: "/App1.app")
         var config = LauncherConfiguration.empty()
-        config.slots[0].app = app1
+        config.slots[0].action = .app(app1)
 
         // Dragging to self returns identical config
         let selfSwap = RingPreviewSlotSwap.swap(in: config, source: 0, destination: 0)

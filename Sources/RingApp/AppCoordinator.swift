@@ -45,11 +45,16 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     /// button hands a right click to no menu of its own, so Ring has to open it here.
     private var statusRightClickMonitor: Any?
     private var store: SlotStore?
+    private var iconProvider: SlotIconProvider?
+    private var dataDirectory: URL?
     /// The panel's own entrance and exit, with the generation that tells an old completion
     /// from the round now on screen.
     private var launch = RingLaunchState()
     /// Entrance timing captured when the active ring opens so entrance/exit stay paired.
     private var activeLaunchMilliseconds: Int = LauncherConfiguration.defaultEntranceDurationMilliseconds
+
+    private static let screenLockedNotification = Notification.Name("com.apple.screenIsLocked")
+    private static let screenUnlockedNotification = Notification.Name("com.apple.screenIsUnlocked")
 
     init(hapticPerformer: any RingHapticFeedbackPerforming = SystemHapticFeedbackPerformer()) {
         self.hapticPerformer = hapticPerformer
@@ -76,6 +81,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 .appendingPathComponent("Library/Application Support", isDirectory: true)
         let dataDirectory = ProjectPaths.dataDirectory(forExecutable: executable,
                                                        supportDirectory: supportDirectory)
+        self.dataDirectory = dataDirectory
+        self.iconProvider = SlotIconProvider(dataDirectory: dataDirectory)
         let store = SlotStore(directory: dataDirectory)
         self.store = store
         // Built here, before the sampler starts: the trigger decides what it watches.
@@ -120,6 +127,16 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             selector: #selector(systemDidWake),
             name: NSWorkspace.didWakeNotification,
             object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(systemWillSleep),
+            name: Self.screenLockedNotification,
+            object: nil)
+        DistributedNotificationCenter.default().addObserver(
+            self,
+            selector: #selector(systemDidWake),
+            name: Self.screenUnlockedNotification,
+            object: nil)
     }
 
     /// Restart a stopped sampler on activation without asking for permission.
@@ -144,6 +161,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         if let statusRightClickMonitor { NSEvent.removeMonitor(statusRightClickMonitor) }
         statusRightClickMonitor = nil
         NSWorkspace.shared.notificationCenter.removeObserver(self)
+        DistributedNotificationCenter.default().removeObserver(self)
     }
 
     /// Reduce Motion switched on while the ring is moving: finish the current round now, so
@@ -369,10 +387,13 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func presentPanel(geometry: RingGeometry) {
         let view = ringView ?? RingView(frame: .zero)
+        let resolver = iconProvider ?? SlotIconProvider(
+            dataDirectory: dataDirectory ?? FileManager.default.homeDirectoryForCurrentUser
+        )
         let items = session.slots.map { slot in
-            RingView.Item(name: slot.app?.displayName ?? "",
-                          icon: slot.app.map { NSWorkspace.shared.icon(forFile: $0.path) },
-                          isFilled: slot.app != nil)
+            RingView.Item(name: slot.displayName,
+                          icon: slot.action.map { resolver.icon(for: $0, size: CGSize(width: 64, height: 64)) },
+                          isFilled: slot.isFilled)
         }
         ringView = view
 
@@ -401,6 +422,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         view.present(geometry: geometry,
                      items: items,
                      mode: inputMode,
+                     showCenterLabel: session.config.showCenterLabelOnHover,
                      decision: nil)
         let opening = launch.opening()
         if case .playEntrance(let generation) = opening {
@@ -535,7 +557,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             cancelRing()
             return
         }
-        let filled = session.slots.map { $0.app != nil }
+        let filled = session.slots.map(\.isFilled)
         switch RingPointer.holdSelection(point, geometry: geometry, filled: filled).action {
         case .launch(let index):
             selectSlot(index)
@@ -602,7 +624,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func currentDecision(at point: CGPoint) -> RingPointerDecision? {
         guard let geometry = ringView?.geometry else { return nil }
-        let filled = session.slots.map { $0.app != nil }
+        let filled = session.slots.map(\.isFilled)
         switch inputMode {
         case .holdToLaunch:
             // The gesture follows the pointer across displays, so its screen is irrelevant:
@@ -630,7 +652,23 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         switch session.click(slot: index) {
         case .launch(let request):
             hidePanel()
-            launcher.open(request.reference) { [weak self] error in
+            if case .systemAction(.lockScreen) = request.action {
+                recognizer.reset()
+                trigger?.hotKeyCancelled()
+                syncCombinationProbe()
+                DispatchQueue.main.async { [weak self] in
+                    guard let self else { return }
+                    self.launcher.open(request.action) { [weak self] error in
+                        self?.session.launchFinished(error: error)
+                        if let error {
+                            NSLog("Ring: %@", error)
+                            self?.presentErrorAlert(error)
+                        }
+                    }
+                }
+                return
+            }
+            launcher.open(request.action) { [weak self] error in
                 self?.session.launchFinished(error: error)
                 if let error {
                     NSLog("Ring: %@", error)
@@ -668,7 +706,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func presentErrorAlert(_ message: String) {
         let alert = NSAlert()
-        alert.messageText = "无法启动应用"
+        alert.messageText = "无法执行操作"
         alert.informativeText = message
         alert.alertStyle = .warning
         alert.addButton(withTitle: "好")
@@ -783,6 +821,7 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     func applyConfiguration(_ config: LauncherConfiguration) {
         let countChanged = config.visibleSlotCount != session.visibleSlotCount
         session.update(config: config)
+        ringView?.showCenterLabel = config.showCenterLabelOnHover
         // A visible ring was drawn for the old count: close it instead of pairing
         // that geometry with the new slot list. The next open uses the new value.
         if countChanged { cancelRing() }

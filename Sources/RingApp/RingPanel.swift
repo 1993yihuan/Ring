@@ -63,6 +63,13 @@ final class RingView: NSView {
         }
     }
 
+    var showCenterLabel: Bool = true {
+        didSet {
+            guard oldValue != showCenterLabel else { return }
+            needsDisplay = true
+        }
+    }
+
     /// The whole pointer decision, pushed by the coordinator: the highlight and the
     /// centre copy are two facts of one value, so the view cannot pair a name with the
     /// wrong verb.
@@ -156,10 +163,12 @@ final class RingView: NSView {
     func present(geometry: RingGeometry,
                  items: [Item],
                  mode: RingInputMode,
+                 showCenterLabel: Bool = true,
                  decision: RingPointerDecision?) {
         self.geometry = geometry
         self.items = items
         self.mode = mode
+        self.showCenterLabel = showCenterLabel
         self.decision = decision
         rebuildIcons()
         CATransaction.begin()
@@ -189,7 +198,8 @@ final class RingView: NSView {
         let text = RingCenter.text(for: decision,
                                    names: items.map(\.name),
                                    filled: items.map(\.isFilled),
-                                   mode: mode)
+                                   mode: mode,
+                                   showCenterLabel: showCenterLabel)
         let width = max(2 * RingPresentation.holeRadius * unit - 8 * unit, 60 * unit)
         var inkBottom = centre.y
         if let title = text.title {

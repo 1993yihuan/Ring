@@ -224,17 +224,17 @@ public struct QuickAppScanner: Sendable {
 }
 
 /// Slot re-targeting and writing logic: locates the slot by UUID and writes back safely.
-public enum QuickAppWriter {
-    /// Re-locates the slot by `targetSlotID` in `config.slots` and updates only its app reference.
+public enum SlotActionWriter {
+    /// Re-locates the slot by `targetSlotID` in `config.slots` and updates its action.
     /// If the slot is no longer found, returns the config unchanged.
-    public static func apply(reference: AppReference,
+    public static func apply(action: SlotAction?,
                              toSlotID targetSlotID: UUID,
                              in config: LauncherConfiguration) -> LauncherConfiguration {
         var updated = config
         guard let index = updated.slots.firstIndex(where: { $0.id == targetSlotID }) else {
             return config
         }
-        updated.slots[index].app = reference
+        updated.slots[index].action = action
         return updated.normalized()
     }
 }
@@ -250,7 +250,7 @@ public enum QuickAppPreviewHitTester {
                                   y: localPoint.y - squareFrame.origin.y)
         for (index, frame) in geometry.iconFrames.enumerated() {
             if frame.contains(pointInRing) {
-                if slots.indices.contains(index) && slots[index].app == nil {
+                if slots.indices.contains(index) && !slots[index].isFilled {
                     return index
                 }
                 return nil

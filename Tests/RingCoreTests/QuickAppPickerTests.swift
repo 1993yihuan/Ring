@@ -117,27 +117,25 @@ final class QuickAppPickerTests: XCTestCase {
         XCTAssertTrue(QuickAppFilter.matches(candidate: candidate1, query: "  "))
     }
 
-    func testQuickAppWriterReLocatesTargetSlotByID() {
-        let slot1 = Slot(id: UUID(), app: AppReference(bundleIdentifier: "app1", displayName: "App1", path: "/path/1"))
+    func testSlotActionWriterReLocatesTargetSlotByID() {
+        let slot1 = Slot(id: UUID(), action: .app(AppReference(bundleIdentifier: "app1", displayName: "App1", path: "/path/1")))
         let targetSlotID = UUID()
-        let slot2 = Slot(id: targetSlotID, app: nil)
-        let slot3 = Slot(id: UUID(), app: AppReference(bundleIdentifier: "app3", displayName: "App3", path: "/path/3"))
+        let slot2 = Slot(id: targetSlotID, action: nil)
+        let slot3 = Slot(id: UUID(), action: .app(AppReference(bundleIdentifier: "app3", displayName: "App3", path: "/path/3")))
 
         var config = LauncherConfiguration(slots: [slot1, slot2, slot3], visibleSlotCount: 5)
         config = config.normalized()
 
         let newRef = AppReference(bundleIdentifier: "new.bundle", displayName: "NewApp", path: "/path/new.app")
-        let updated = QuickAppWriter.apply(reference: newRef, toSlotID: targetSlotID, in: config)
+        let updated = SlotActionWriter.apply(action: .app(newRef), toSlotID: targetSlotID, in: config)
 
         // Only slot2 should be updated
-        XCTAssertEqual(updated.slots.first(where: { $0.id == slot1.id })?.app?.displayName, "App1")
-        XCTAssertEqual(updated.slots.first(where: { $0.id == slot3.id })?.app?.displayName, "App3")
+        XCTAssertEqual(updated.slots.first(where: { $0.id == slot1.id })?.displayName, "App1")
+        XCTAssertEqual(updated.slots.first(where: { $0.id == slot3.id })?.displayName, "App3")
 
         let targetSlot = updated.slots.first(where: { $0.id == targetSlotID })
         XCTAssertNotNil(targetSlot)
-        XCTAssertEqual(targetSlot?.app?.displayName, "NewApp")
-        XCTAssertEqual(targetSlot?.app?.path, "/path/new.app")
-        XCTAssertEqual(targetSlot?.app?.bundleIdentifier, "new.bundle")
+        XCTAssertEqual(targetSlot?.action, .app(newRef))
 
         // After reordering slots, writer still finds it by UUID
         var reordered = updated
@@ -145,17 +143,17 @@ final class QuickAppPickerTests: XCTestCase {
         reordered.slots.insert(moved, at: 0)
 
         let replaceRef = AppReference(bundleIdentifier: "replaced", displayName: "ReplacedApp", path: "/path/rep.app")
-        let finalConfig = QuickAppWriter.apply(reference: replaceRef, toSlotID: targetSlotID, in: reordered)
+        let finalConfig = SlotActionWriter.apply(action: .app(replaceRef), toSlotID: targetSlotID, in: reordered)
 
-        XCTAssertEqual(finalConfig.slots.first(where: { $0.id == targetSlotID })?.app?.displayName, "ReplacedApp")
+        XCTAssertEqual(finalConfig.slots.first(where: { $0.id == targetSlotID })?.displayName, "ReplacedApp")
     }
 
-    func testQuickAppWriterWithMissingSlotIDLeavesConfigUnchanged() {
+    func testSlotActionWriterWithMissingSlotIDLeavesConfigUnchanged() {
         let config = LauncherConfiguration.empty(visibleSlotCount: 5)
         let unknownID = UUID()
         let newRef = AppReference(bundleIdentifier: "new", displayName: "NewApp", path: "/path/new.app")
 
-        let updated = QuickAppWriter.apply(reference: newRef, toSlotID: unknownID, in: config)
+        let updated = SlotActionWriter.apply(action: .app(newRef), toSlotID: unknownID, in: config)
         XCTAssertEqual(updated, config)
     }
 
@@ -165,17 +163,17 @@ final class QuickAppPickerTests: XCTestCase {
         let app3 = AppReference(bundleIdentifier: "b3", displayName: "App3", path: "/Applications/App3.app")
         let app4 = AppReference(bundleIdentifier: "b4", displayName: "App4", path: "/Applications/App4.app")
 
-        let slot1 = Slot(id: UUID(), app: app1)
-        let slot2 = Slot(id: UUID(), app: app2)
-        let slot3 = Slot(id: UUID(), app: app3)
-        let slot4 = Slot(id: UUID(), app: app4)
+        let slot1 = Slot(id: UUID(), action: .app(app1))
+        let slot2 = Slot(id: UUID(), action: .app(app2))
+        let slot3 = Slot(id: UUID(), action: .app(app3))
+        let slot4 = Slot(id: UUID(), action: .app(app4))
         let emptySlotID = UUID()
-        let slot5 = Slot(id: emptySlotID, app: nil)
+        let slot5 = Slot(id: emptySlotID, action: nil)
 
         let config = LauncherConfiguration(slots: [slot1, slot2, slot3, slot4, slot5], visibleSlotCount: 5).normalized()
         let visibleSlots = config.visibleSlots
         XCTAssertEqual(visibleSlots.count, 5)
-        XCTAssertNil(visibleSlots[4].app)
+        XCTAssertFalse(visibleSlots[4].isFilled)
         XCTAssertEqual(visibleSlots[4].id, emptySlotID)
 
         // Entry 1: Right column "Add..." clicked on row 5 (index 4)
@@ -219,21 +217,21 @@ final class QuickAppPickerTests: XCTestCase {
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "OldApp", path: "/Applications/OldApp.app")
         let app3 = AppReference(bundleIdentifier: "b3", displayName: "Keep3", path: "/Applications/Keep3.app")
 
-        let slot1 = Slot(id: UUID(), app: app1)
+        let slot1 = Slot(id: UUID(), action: .app(app1))
         let replaceSlotID = UUID()
-        let slot2 = Slot(id: replaceSlotID, app: app2)
-        let slot3 = Slot(id: UUID(), app: app3)
+        let slot2 = Slot(id: replaceSlotID, action: .app(app2))
+        let slot3 = Slot(id: UUID(), action: .app(app3))
 
         let config = LauncherConfiguration(slots: [slot1, slot2, slot3], visibleSlotCount: 3).normalized()
 
         // Replace slot 2
         let newApp = AppReference(bundleIdentifier: "bNew", displayName: "NewApp", path: "/Applications/NewApp.app")
-        let updated = QuickAppWriter.apply(reference: newApp, toSlotID: replaceSlotID, in: config)
+        let updated = SlotActionWriter.apply(action: .app(newApp), toSlotID: replaceSlotID, in: config)
 
-        XCTAssertEqual(updated.slots[0].app?.displayName, "Keep1")
-        XCTAssertEqual(updated.slots[1].app?.displayName, "NewApp")
+        XCTAssertEqual(updated.slots[0].displayName, "Keep1")
+        XCTAssertEqual(updated.slots[1].displayName, "NewApp")
         XCTAssertEqual(updated.slots[1].id, replaceSlotID)
-        XCTAssertEqual(updated.slots[2].app?.displayName, "Keep3")
+        XCTAssertEqual(updated.slots[2].displayName, "Keep3")
     }
 
     func testKeyboardNavigationUpDownAndReturn() {
@@ -280,8 +278,8 @@ final class QuickAppPickerTests: XCTestCase {
         let emptySlotID = UUID()
         let initialConfig = LauncherConfiguration(
             slots: [
-                Slot(id: UUID(), app: AppReference(bundleIdentifier: "a", displayName: "A", path: "/Applications/A.app")),
-                Slot(id: emptySlotID, app: nil)
+                Slot(id: UUID(), action: .app(AppReference(bundleIdentifier: "a", displayName: "A", path: "/Applications/A.app"))),
+                Slot(id: emptySlotID, action: nil)
             ],
             visibleSlotCount: 5
         ).normalized()
@@ -291,15 +289,13 @@ final class QuickAppPickerTests: XCTestCase {
         // Re-read and apply selection
         let loaded = try store.load()
         let newApp = AppReference(bundleIdentifier: "com.test.new", displayName: "FreshApp", path: "/Applications/FreshApp.app")
-        let updated = QuickAppWriter.apply(reference: newApp, toSlotID: emptySlotID, in: loaded)
+        let updated = SlotActionWriter.apply(action: .app(newApp), toSlotID: emptySlotID, in: loaded)
         try store.save(updated)
 
         // Verify re-read from disk
         let reloaded = try store.load()
         let targetSlot = reloaded.slots.first(where: { $0.id == emptySlotID })
         XCTAssertNotNil(targetSlot)
-        XCTAssertEqual(targetSlot?.app?.displayName, "FreshApp")
-        XCTAssertEqual(targetSlot?.app?.path, "/Applications/FreshApp.app")
-        XCTAssertEqual(targetSlot?.app?.bundleIdentifier, "com.test.new")
+        XCTAssertEqual(targetSlot?.action, .app(newApp))
     }
 }

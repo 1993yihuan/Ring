@@ -70,8 +70,8 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
             XCTAssertEqual(decoded.entranceDurationMilliseconds, 260)
             XCTAssertFalse(decoded.hapticFeedbackEnabled)
             XCTAssertEqual(decoded.slots.map(\.id), ids)
-            XCTAssertEqual(decoded.slots[0].app?.displayName, "Safari")
-            XCTAssertEqual(decoded.slots[6].app?.displayName, "TextEdit", "隐藏尾部槽位与 UUID 必须完整保留")
+            XCTAssertEqual(decoded.slots[0].displayName, "Safari")
+            XCTAssertEqual(decoded.slots[6].displayName, "TextEdit", "隐藏尾部槽位与 UUID 必须完整保留")
 
             let reencoded = try decoded.encoded()
             let reencodedString = try XCTUnwrap(String(data: reencoded, encoding: .utf8))
@@ -92,9 +92,9 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "App2", path: "/Applications/App2.app")
         let hiddenApp = AppReference(bundleIdentifier: "b7", displayName: "Hidden7", path: "/Applications/Hidden7.app")
         var slots = (0..<8).map { _ in Slot() }
-        slots[0].app = app1
-        slots[1].app = app2
-        slots[6].app = hiddenApp
+        slots[0].action = .app(app1)
+        slots[1].action = .app(app2)
+        slots[6].action = .app(hiddenApp)
 
         let config = LauncherConfiguration(
             slots: slots,
@@ -108,21 +108,21 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
         XCTAssertEqual(normalized.entranceDurationMilliseconds, 260)
         XCTAssertFalse(normalized.hapticFeedbackEnabled)
 
-        let reordered = SlotReordering.moveApp(in: normalized, from: 0, to: 1)
-        XCTAssertEqual(reordered.slots[0].app, app2)
-        XCTAssertEqual(reordered.slots[1].app, app1)
-        XCTAssertEqual(reordered.slots[6].app, hiddenApp)
+        let reordered = SlotReordering.moveSlot(in: normalized, from: 0, to: 1)
+        XCTAssertEqual(reordered.slots[0].action, .app(app2))
+        XCTAssertEqual(reordered.slots[1].action, .app(app1))
+        XCTAssertEqual(reordered.slots[6].action, .app(hiddenApp))
         XCTAssertEqual(reordered.entranceDurationMilliseconds, 260)
         XCTAssertFalse(reordered.hapticFeedbackEnabled)
 
         let swapped = RingPreviewSlotSwap.swap(in: reordered, source: 1, destination: 2)
-        XCTAssertEqual(swapped.slots[2].app, app1)
-        XCTAssertEqual(swapped.slots[6].app, hiddenApp)
+        XCTAssertEqual(swapped.slots[2].action, .app(app1))
+        XCTAssertEqual(swapped.slots[6].action, .app(hiddenApp))
         XCTAssertEqual(swapped.entranceDurationMilliseconds, 260)
 
         let newApp = AppReference(bundleIdentifier: "b3", displayName: "App3", path: "/Applications/App3.app")
-        let written = QuickAppWriter.apply(reference: newApp, toSlotID: slots[3].id, in: swapped)
-        XCTAssertEqual(written.slots[3].app, newApp)
+        let written = SlotActionWriter.apply(action: .app(newApp), toSlotID: slots[3].id, in: swapped)
+        XCTAssertEqual(written.slots[3].action, .app(newApp))
         XCTAssertEqual(written.entranceDurationMilliseconds, 260)
 
         let session = RingSession(config: normalized)
@@ -202,7 +202,7 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
 
     func testRingLaunchStateCancelDuringEntranceReopenDuringExitAndStaleGenerations() {
         var config = LauncherConfiguration.empty()
-        config.slots[0].app = AppReference(bundleIdentifier: "com.apple.Safari", displayName: "Safari", path: "/Applications/Safari.app")
+        config.slots[0].action = .app(AppReference(bundleIdentifier: "com.apple.Safari", displayName: "Safari", path: "/Applications/Safari.app"))
         let session = RingSession(config: config)
         var launch = RingLaunchState()
 
@@ -227,7 +227,7 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
         guard case .launch(let request) = session.click(slot: 0) else {
             return XCTFail("Expected immediate .launch during entrance")
         }
-        XCTAssertEqual(request.reference.displayName, "Safari")
+        XCTAssertEqual(request.action.displayName, "Safari")
         XCTAssertEqual(launch.closing(), .playExit(generation: 2))
         XCTAssertEqual(launch.entranceFinished(generation: 2), .ignored)
         XCTAssertEqual(launch.exitFinished(generation: 2), .settled)
@@ -339,7 +339,7 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
 
     func testNonBlockingLaunchTriggersExitWithoutWaitingForCompletion() {
         var config = LauncherConfiguration.empty()
-        config.slots[0].app = AppReference(bundleIdentifier: "com.apple.Safari", displayName: "Safari", path: "/Applications/Safari.app")
+        config.slots[0].action = .app(AppReference(bundleIdentifier: "com.apple.Safari", displayName: "Safari", path: "/Applications/Safari.app"))
         let session = RingSession(config: config)
         var launch = RingLaunchState()
 
@@ -352,7 +352,7 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
         guard case .launch(let request) = outcome else {
             return XCTFail("Expected immediate .launch outcome")
         }
-        XCTAssertEqual(request.reference.displayName, "Safari")
+        XCTAssertEqual(request.action.displayName, "Safari")
         XCTAssertEqual(session.phase, .launching(request.slotID))
         XCTAssertEqual(launch.closing(), .playExit(generation: 1))
         XCTAssertEqual(launch.phase, .exiting)
@@ -371,8 +371,8 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
 
         let app1 = AppReference(bundleIdentifier: "b1", displayName: "App1", path: "/Applications/App1.app")
         let app2 = AppReference(bundleIdentifier: "b2", displayName: "App2", path: "/Applications/App2.app")
-        let slotsA = [Slot(id: UUID(), app: app1), Slot(id: UUID(), app: nil)]
-        let slotsB = [Slot(id: UUID(), app: app2), Slot(id: UUID(), app: nil)]
+        let slotsA = [Slot(id: UUID(), action: .app(app1)), Slot(id: UUID(), action: nil)]
+        let slotsB = [Slot(id: UUID(), action: .app(app2)), Slot(id: UUID(), action: nil)]
         let size = CGSize(width: 324, height: 324)
 
         // Initial pass must build slot layers.

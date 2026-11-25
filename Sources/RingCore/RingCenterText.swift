@@ -14,11 +14,10 @@ public enum RingInputMode: Sendable, Equatable {
 public enum RingHover: Sendable, Equatable {
     case none
     case emptySlot
-    case app(String)
+    case slot(String)
 }
 
-/// What the middle of the ring says, if anything. A chosen app leaves it empty; only an
-/// empty slot still has copy of its own.
+/// What the middle of the ring says, if anything.
 public struct RingCenterText: Sendable, Equatable {
     public var title: String?
     public var action: String?
@@ -38,49 +37,50 @@ public enum RingCenter {
         }
         guard filled[index] else { return .emptySlot }
         let name = names[index]
-        return name.isEmpty ? .none : .app(name)
+        return name.isEmpty ? .none : .slot(name)
     }
 
     /// The copy for a whole decision: one mapping from the slot to what the middle says, so
     /// the panel cannot invent a second interpretation of the same decision.
     public static func text(for decision: RingPointerDecision,
                             names: [String],
-                            filled: [Bool]) -> RingCenterText {
-        // Reuse the one index → RingHover mapping instead of repeating its rules.
-        return text(for: hover(index: decision.slot, names: names, filled: filled))
+                            filled: [Bool],
+                            showCenterLabel: Bool = true) -> RingCenterText {
+        return text(for: hover(index: decision.slot, names: names, filled: filled),
+                    showCenterLabel: showCenterLabel)
     }
 
     /// Mode-aware copy: the gesture entry has no click, so it must not promise one.
     public static func text(for decision: RingPointerDecision,
                             names: [String],
                             filled: [Bool],
-                            mode: RingInputMode) -> RingCenterText {
+                            mode: RingInputMode,
+                            showCenterLabel: Bool = true) -> RingCenterText {
         switch mode {
         case .angularClick:
-            return text(for: decision, names: names, filled: filled)
+            return text(for: decision, names: names, filled: filled, showCenterLabel: showCenterLabel)
         case .holdToLaunch:
-            guard let slot = decision.slot,
-                  names.indices.contains(slot),
-                  filled.indices.contains(slot) else {
-                // Nothing is selected: the centre stays quiet.
+            switch hover(index: decision.slot, names: names, filled: filled) {
+            case .none:
                 return RingCenterText(title: nil, action: nil)
+            case .emptySlot:
+                return RingCenterText(title: "空位", action: nil)
+            case .slot(let name):
+                return RingCenterText(title: showCenterLabel ? name : nil, action: nil)
             }
-            if !filled[slot] { return RingCenterText(title: "空位", action: nil) }
-            // A chosen app says nothing at all in the middle.
-            return RingCenterText(title: nil, action: nil)
         }
     }
 
-    /// A chosen app leaves the middle completely empty in both entries: no name, no verb.
-    /// Only an empty slot or no selection says anything at all.
-    public static func text(for hover: RingHover) -> RingCenterText {
+    /// When `showCenterLabel` is true, hovering any configured slot shows its display name;
+    /// when false, configured slots leave the middle empty. Empty slots always show "空位".
+    public static func text(for hover: RingHover, showCenterLabel: Bool = true) -> RingCenterText {
         switch hover {
         case .none:
             return RingCenterText(title: nil, action: nil)
         case .emptySlot:
             return RingCenterText(title: "空位", action: "点击取消")
-        case .app:
-            return RingCenterText(title: nil, action: nil)
+        case .slot(let name):
+            return RingCenterText(title: showCenterLabel ? name : nil, action: nil)
         }
     }
 }
