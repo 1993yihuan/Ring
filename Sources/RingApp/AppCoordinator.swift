@@ -329,6 +329,9 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             guard !session.isVisible else { return }
             // Second press is down: show immediately instead of waiting for the release.
             showRing(mode: .holdToLaunch)
+            if !session.isVisible {
+                recognizer.reset()
+            }
         case .released:
             // Act on where the release happened, not on the last hover move.
             if inputMode == .holdToLaunch, session.isVisible {
@@ -713,15 +716,20 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         let returnTarget = activeReturnTargets.indices.contains(index) ? activeReturnTargets[index] : nil
         switch session.click(slot: index) {
         case .launch(let request):
+            let launchGeneration = session.launchGeneration
             hidePanel()
-            if let returnTarget {
-                launcher.activateRunningApplication(returnTarget, fallbackAction: request.action) { [weak self] error in
-                    self?.session.launchFinished(error: error)
-                    if let error {
-                        NSLog("Ring: %@", error)
-                        self?.presentErrorAlert(error)
+            let completeLaunch: (String?) -> Void = { [weak self] error in
+                guard let self else { return }
+                let isCurrent = self.session.launchFinished(generation: launchGeneration, error: error)
+                if let error {
+                    NSLog("Ring: %@", error)
+                    if isCurrent && !self.session.isVisible {
+                        self.presentErrorAlert(error)
                     }
                 }
+            }
+            if let returnTarget {
+                launcher.activateRunningApplication(returnTarget, fallbackAction: request.action, completion: completeLaunch)
                 return
             }
             if case .systemAction(.lockScreen) = request.action {
@@ -730,23 +738,11 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
                 syncCombinationProbe()
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    self.launcher.open(request.action) { [weak self] error in
-                        self?.session.launchFinished(error: error)
-                        if let error {
-                            NSLog("Ring: %@", error)
-                            self?.presentErrorAlert(error)
-                        }
-                    }
+                    self.launcher.open(request.action, completion: completeLaunch)
                 }
                 return
             }
-            launcher.open(request.action) { [weak self] error in
-                self?.session.launchFinished(error: error)
-                if let error {
-                    NSLog("Ring: %@", error)
-                    self?.presentErrorAlert(error)
-                }
-            }
+            launcher.open(request.action, completion: completeLaunch)
         case .emptySlot, .busy, .ignored:
             hidePanel()
         }

@@ -734,6 +734,107 @@ final class RingSessionTests: XCTestCase {
         XCTAssertFalse(session.isVisible)
     }
 
+    /// Re-triggering while A is still asynchronously launching must open immediately, and
+    /// A's late success or failure callback must not tear down the visible ring or B's launch.
+    func testRetriggerWhileLaunchingSucceedsAndLateCompletionCannotClobberVisibleRing() {
+        let session = RingSession(config: filledConfiguration())
+
+        XCTAssertTrue(session.trigger())
+        guard case .launch(let reqA) = session.click(slot: 0) else {
+            return XCTFail("expected launch A")
+        }
+        XCTAssertEqual(reqA.action.displayName, "A")
+        let genA = session.launchGeneration
+        XCTAssertEqual(session.phase, .launching(reqA.slotID))
+
+        // Within the same open round, a duplicate click still returns .busy.
+        XCTAssertEqual(session.click(slot: 1), .busy)
+        XCTAssertEqual(session.launchCount, 1)
+
+        // While A is still launching, re-triggering succeeds immediately.
+        XCTAssertTrue(session.trigger())
+        XCTAssertTrue(session.isVisible)
+        XCTAssertEqual(session.triggerCount, 2)
+
+        // Late completion (success, error, or untokenized) for A cannot hide the new visible ring.
+        XCTAssertFalse(session.launchFinished(generation: genA, error: nil))
+        XCTAssertTrue(session.isVisible)
+        XCTAssertFalse(session.launchFinished(generation: genA, error: "A 启动超时"))
+        XCTAssertTrue(session.isVisible)
+        XCTAssertNil(session.lastError)
+        session.launchFinished()
+        XCTAssertTrue(session.isVisible)
+
+        // User selects B; B launches normally while A is ignored even if it fails afterwards.
+        guard case .launch(let reqB) = session.click(slot: 1) else {
+            return XCTFail("expected launch B")
+        }
+        XCTAssertEqual(reqB.action.displayName, "B")
+        let genB = session.launchGeneration
+        XCTAssertEqual(session.phase, .launching(reqB.slotID))
+        XCTAssertEqual(session.launchCount, 2)
+
+        XCTAssertFalse(session.launchFinished(generation: genA, error: "A 迟到失败"))
+        XCTAssertEqual(session.phase, .launching(reqB.slotID))
+        XCTAssertNil(session.lastError)
+
+        XCTAssertTrue(session.launchFinished(generation: genB, error: nil))
+        XCTAssertEqual(session.phase, .hidden)
+        XCTAssertNil(session.lastError)
+    }
+
+    /// Simulates double-tap Option and Command: select A on release, immediately double-tap
+    /// again before A's async launch returns, then release on B to launch B.
+    func testDoubleTapOptionAndCommandReopenAndLaunchBWhileALaunching() {
+        for tapKey in TapKey.allCases {
+            var poll = PollingOptionState()
+            var recognizer = OptionDoubleTapRecognizer()
+            let session = RingSession(config: filledConfiguration())
+            var t: TimeInterval = 2_000
+
+            func snap(down: Bool) -> OptionPollSnapshot {
+                OptionPollSnapshot(leftDown: down, rightDown: false, aggregateFlag: down)
+            }
+            func step(_ down: Bool, dt: TimeInterval) -> [OptionDoubleTapRecognizer.Outcome] {
+                t += dt
+                return poll.consume(snap(down: down)).map { recognizer.handle($0, at: t) }
+            }
+
+            XCTAssertTrue(poll.consume(snap(down: false)).isEmpty, "baseline for \(tapKey)")
+            XCTAssertEqual(step(true, dt: 0.02), [.none])
+            XCTAssertEqual(step(false, dt: 0.05), [.none])
+            XCTAssertEqual(step(true, dt: 0.08), [.triggered(.left)])
+            XCTAssertTrue(session.trigger())
+
+            XCTAssertEqual(step(false, dt: 0.10), [.released(.left)])
+            guard case .launch(let reqA) = session.click(slot: 0) else {
+                return XCTFail("expected launch A for \(tapKey)")
+            }
+            XCTAssertEqual(reqA.action.displayName, "A")
+            let genA = session.launchGeneration
+
+            // Immediately double-tap again while A is still launching.
+            XCTAssertEqual(step(true, dt: 0.03), [.none])
+            XCTAssertEqual(step(false, dt: 0.05), [.none])
+            XCTAssertEqual(step(true, dt: 0.08), [.triggered(.left)])
+            XCTAssertTrue(session.trigger())
+            XCTAssertTrue(session.isVisible)
+
+            // Late A completion while Ring is open for B does not break visibility.
+            XCTAssertFalse(session.launchFinished(generation: genA, error: nil))
+            XCTAssertTrue(session.isVisible)
+
+            XCTAssertEqual(step(false, dt: 0.12), [.released(.left)])
+            guard case .launch(let reqB) = session.click(slot: 1) else {
+                return XCTFail("expected launch B for \(tapKey)")
+            }
+            XCTAssertEqual(reqB.action.displayName, "B")
+            XCTAssertTrue(session.launchFinished(generation: session.launchGeneration, error: nil))
+            XCTAssertEqual(session.phase, .hidden)
+            XCTAssertEqual(session.launchCount, 2)
+        }
+    }
+
     func testMovingAppKeepsEmptySlotBehind() {
         let moved = SlotReordering.moveSlot(in: filledConfiguration(), from: 0, to: 5)
         XCTAssertEqual(moved.slots[5].displayName, "A")

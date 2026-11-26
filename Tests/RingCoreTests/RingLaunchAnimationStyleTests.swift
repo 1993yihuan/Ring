@@ -362,6 +362,68 @@ final class RingLaunchGentleAnimationTests: XCTestCase {
         XCTAssertEqual(launch.phase, .hidden)
     }
 
+    func testReopenDuringExitAnimationWhilePreviousLaunchIsInFlight() {
+        var config = LauncherConfiguration.empty()
+        config.slots[0].action = .app(AppReference(bundleIdentifier: "com.a", displayName: "AppA", path: "/Applications/AppA.app"))
+        config.slots[1].action = .app(AppReference(bundleIdentifier: "com.b", displayName: "AppB", path: "/Applications/AppB.app"))
+        let session = RingSession(config: config)
+        var launch = RingLaunchState()
+        let layer = CALayer()
+        layer.bounds = CGRect(x: 0, y: 0, width: 212, height: 212)
+        layer.anchorPoint = .zero
+        let centre = CGPoint(x: 106, y: 106)
+        let spec = RingLaunchAnimation.spec(entranceMilliseconds: 140, reduceMotion: false)
+
+        // 1. Open and select A: panel enters exiting animation while A launch is in flight.
+        XCTAssertTrue(session.trigger())
+        XCTAssertEqual(launch.opening(), .playEntrance(generation: 1))
+        RingLaunchLayerDriver.playGentleEntrance(on: layer, centre: centre, spec: spec) {}
+        XCTAssertEqual(launch.entranceFinished(generation: 1), .settled)
+
+        guard case .launch(let reqA) = session.click(slot: 0) else {
+            return XCTFail("Expected launch A")
+        }
+        let genA = session.launchGeneration
+        XCTAssertEqual(session.phase, .launching(reqA.slotID))
+        XCTAssertEqual(launch.closing(), .playExit(generation: 1))
+        XCTAssertEqual(launch.phase, .exiting)
+        RingLaunchLayerDriver.playGentleExit(on: layer, centre: centre, spec: spec) {}
+        XCTAssertNotNil(layer.animation(forKey: RingLaunchLayerDriver.gentleExitKey))
+
+        // 2. Reopen immediately while exit animation is still running AND A is still launching.
+        XCTAssertTrue(session.trigger())
+        XCTAssertTrue(session.isVisible)
+        XCTAssertEqual(launch.opening(), .playEntrance(generation: 2))
+        XCTAssertEqual(launch.phase, .entering)
+        RingLaunchLayerDriver.resetLayer(layer)
+        RingLaunchLayerDriver.playGentleEntrance(on: layer, centre: centre, spec: spec) {}
+        XCTAssertNil(layer.animation(forKey: RingLaunchLayerDriver.gentleExitKey))
+        XCTAssertNotNil(layer.animation(forKey: RingLaunchLayerDriver.gentleEntranceKey))
+        XCTAssertEqual(layer.opacity, 1.0, accuracy: 1e-6)
+        XCTAssertTrue(CATransform3DEqualToTransform(layer.transform, CATransform3DIdentity))
+
+        // 3. Stale exit completion (gen 1) and late A error callback cannot disturb the visible ring.
+        XCTAssertEqual(launch.exitFinished(generation: 1), .ignored)
+        XCTAssertEqual(launch.phase, .entering)
+        XCTAssertFalse(session.launchFinished(generation: genA, error: "AppA 延迟失败"))
+        XCTAssertTrue(session.isVisible)
+        XCTAssertNil(session.lastError)
+
+        // 4. Select B while still entering (or after entrance): B launches cleanly.
+        guard case .launch(let reqB) = session.click(slot: 1) else {
+            return XCTFail("Expected launch B")
+        }
+        XCTAssertEqual(reqB.action.displayName, "AppB")
+        let genB = session.launchGeneration
+        XCTAssertEqual(launch.closing(), .playExit(generation: 2))
+        XCTAssertEqual(launch.entranceFinished(generation: 2), .ignored)
+        XCTAssertEqual(launch.exitFinished(generation: 2), .settled)
+        XCTAssertEqual(launch.phase, .hidden)
+
+        XCTAssertTrue(session.launchFinished(generation: genB, error: nil))
+        XCTAssertEqual(session.phase, .hidden)
+    }
+
     // MARK: - 6. Preview Shadow Direction & Redundant Slot Rebuild Guard
 
     func testFlippedPreviewDownwardShadowOffsetAndSlotRebuildGuard() {

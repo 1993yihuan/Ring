@@ -674,6 +674,68 @@ final class TriggerControllerTests: XCTestCase {
         XCTAssertTrue(controller.hotKeyPressed())
     }
 
+    /// Re-pressing a custom combination while A's exit animation and async launch are still
+    /// in flight opens a new hold session immediately and launches B on release.
+    func testCustomCombinationReopensAndLaunchesBWhilePreviousLaunchInFlight() {
+        var config = LauncherConfiguration.empty()
+        config.slots[0].action = .app(AppReference(bundleIdentifier: "com.a", displayName: "AppA", path: "/Applications/AppA.app"))
+        config.slots[1].action = .app(AppReference(bundleIdentifier: "com.b", displayName: "AppB", path: "/Applications/AppB.app"))
+        let ringSession = RingSession(config: config)
+        var launchState = RingLaunchState()
+
+        let (controller, _, _) = makeController(directory: testScratchDirectory())
+        XCTAssertTrue(controller.record(commandK))
+
+        var selectedSlot = 0
+        var activeLaunchGenerations: [UInt64] = []
+        controller.onFinish = {
+            if case .launch = ringSession.click(slot: selectedSlot) {
+                activeLaunchGenerations.append(ringSession.launchGeneration)
+                _ = launchState.closing()
+            }
+        }
+
+        // Round 1: press ⌘K -> open ring -> release launches A.
+        XCTAssertTrue(controller.hotKeyPressed())
+        XCTAssertTrue(ringSession.trigger())
+        XCTAssertEqual(launchState.opening(), .playEntrance(generation: 1))
+        XCTAssertEqual(controller.combinationProbe, commandK)
+
+        controller.hotKeyReleased()
+        XCTAssertNil(controller.combinationProbe)
+        XCTAssertEqual(activeLaunchGenerations.count, 1)
+        let genA = activeLaunchGenerations[0]
+        XCTAssertEqual(launchState.phase, .exiting)
+
+        // Round 2: while A is still launching and exit animation is still running, press ⌘K again.
+        selectedSlot = 1
+        XCTAssertTrue(controller.hotKeyPressed())
+        XCTAssertTrue(ringSession.trigger())
+        XCTAssertEqual(launchState.opening(), .playEntrance(generation: 2))
+        XCTAssertEqual(controller.combinationProbe, commandK)
+        XCTAssertTrue(ringSession.isVisible)
+
+        // Stale exit completion and late A error arrive while holding ⌘K: neither breaks Round 2.
+        XCTAssertEqual(launchState.exitFinished(generation: 1), .ignored)
+        XCTAssertEqual(launchState.phase, .entering)
+        XCTAssertFalse(ringSession.launchFinished(generation: genA, error: "AppA 延迟错误"))
+        XCTAssertTrue(ringSession.isVisible)
+        XCTAssertNil(ringSession.lastError)
+
+        // Release via sample (and duplicate Carbon release) launches B exactly once.
+        XCTAssertTrue(controller.hotKeySample(held: false))
+        controller.hotKeyReleased()
+        XCTAssertNil(controller.combinationProbe)
+        XCTAssertEqual(activeLaunchGenerations.count, 2)
+        let genB = activeLaunchGenerations[1]
+        XCTAssertEqual(ringSession.launchCount, 2)
+
+        // B completes normally.
+        XCTAssertEqual(launchState.exitFinished(generation: 2), .settled)
+        XCTAssertTrue(ringSession.launchFinished(generation: genB, error: nil))
+        XCTAssertEqual(ringSession.phase, .hidden)
+    }
+
     /// Restoring the default keeps working no matter what was active before.
     func testRestoringTheDefaultUnregistersTheCombination() throws {
         let directory = testScratchDirectory()

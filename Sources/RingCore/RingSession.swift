@@ -29,6 +29,7 @@ public final class RingSession {
     public private(set) var lastError: String?
     public private(set) var triggerCount = 0
     public private(set) var launchCount = 0
+    public private(set) var launchGeneration: UInt64 = 0
 
     public init(config: LauncherConfiguration = .empty()) {
         self.config = config.normalized()
@@ -56,11 +57,18 @@ public final class RingSession {
 
     @discardableResult
     public func trigger() -> Bool {
-        guard phase == .hidden else { return false }
-        phase = .visible
-        triggerCount += 1
-        lastError = nil
-        return true
+        switch phase {
+        case .visible:
+            return false
+        case .hidden, .launching:
+            // An earlier launch may still be completing asynchronously in the background;
+            // reopening supersedes it so a late completion cannot tear down this round.
+            launchGeneration &+= 1
+            phase = .visible
+            triggerCount += 1
+            lastError = nil
+            return true
+        }
     }
 
     public func cancel() {
@@ -84,6 +92,7 @@ public final class RingSession {
                 phase = .hidden
                 return .emptySlot
             }
+            launchGeneration &+= 1
             let request = LaunchRequest(slotID: config.slots[index].id, action: action)
             phase = .launching(request.slotID)
             launchCount += 1
@@ -91,7 +100,18 @@ public final class RingSession {
         }
     }
 
+    /// Settles only the matching in-flight launch generation so a late callback from an earlier
+    /// launch cannot dismiss a newly opened ring or a subsequent launch.
+    @discardableResult
+    public func launchFinished(generation: UInt64, error message: String? = nil) -> Bool {
+        guard case .launching = phase, generation == launchGeneration else { return false }
+        phase = .hidden
+        lastError = message
+        return true
+    }
+
     public func launchFinished(error message: String? = nil) {
+        guard case .launching = phase else { return }
         phase = .hidden
         lastError = message
     }
