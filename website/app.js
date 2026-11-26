@@ -386,6 +386,9 @@
         Array.prototype.forEach.call(document.querySelectorAll("[data-version-meta]"), function (el) {
           el.textContent = "v" + cleanVer + " · macOS 13 及更高 · 开源免费 · 首次打开需在系统设置中允许";
         });
+        Array.prototype.forEach.call(document.querySelectorAll("[data-version-compact]"), function (el) {
+          el.textContent = "v" + cleanVer + " · macOS 13+ · MIT 开源";
+        });
         Array.prototype.forEach.call(document.querySelectorAll("[data-version-short]"), function (el) {
           el.textContent = "v" + cleanVer + " · macOS 13+";
         });
