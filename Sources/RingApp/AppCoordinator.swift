@@ -58,6 +58,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     )
     /// Per-slot return target resolved once when the ring opens so hover visuals and release action match.
     private var activeReturnTargets: [RunningAppIdentity?] = []
+    private var foregroundGuard = LaunchForegroundGuard()
+    private var foregroundGuardRefreshTimer: Timer?
 
     private static let screenLockedNotification = Notification.Name("com.apple.screenIsLocked")
     private static let screenUnlockedNotification = Notification.Name("com.apple.screenIsUnlocked")
@@ -175,6 +177,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        foregroundGuardRefreshTimer?.invalidate()
+        foregroundGuardRefreshTimer = nil
         monitor.stop()
         trigger?.stopListening()
         if let statusRightClickMonitor { NSEvent.removeMonitor(statusRightClickMonitor) }
@@ -229,7 +233,23 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else {
             return
         }
-        previousAppTracker.recordActivation(RunningAppIdentity(runningApplication: app))
+        let identity = RunningAppIdentity(runningApplication: app)
+        let decision = foregroundGuard.handleApplicationActivated(identity,
+                                                                at: now(),
+                                                                isStillInitializing: { [launcher] target in
+                                                                    launcher.isTargetStillInitializing(target)
+                                                                })
+        switch decision {
+        case .recordNormally, .externalAppActivated:
+            previousAppTracker.recordActivation(identity)
+        case .restoreTarget(let target, let suppressTracking):
+            if !suppressTracking {
+                previousAppTracker.recordActivation(identity)
+            }
+            let activated = launcher.activateTarget(target)
+            foregroundGuard.recordCorrectionAttempt(succeeded: activated, at: now())
+        }
+        syncForegroundGuardRefreshTimer()
     }
 
     @objc private func workspaceDidTerminateApplication(_ notification: Notification) {
@@ -241,6 +261,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     private func resetInteraction(reapplying: Bool) {
         recognizer.reset()
+        foregroundGuard.clearAll()
+        syncForegroundGuardRefreshTimer()
         if session.isVisible { cancelRing() }
         monitor.forwardsPointerMoves = false
         monitor.resetSamplingBaseline()
@@ -385,6 +407,8 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
 
     func showRing(mode: RingInputMode) {
         guard session.trigger() else { return }
+        foregroundGuard.ringDidOpen()
+        syncForegroundGuardRefreshTimer()
         hapticTracker.reset()
         // The mode belongs to this visible ring, so it is set only once the ring is really
         // up. A refused trigger (ring already visible) returns above and changes nothing.
@@ -717,10 +741,29 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
         switch session.click(slot: index) {
         case .launch(let request):
             let launchGeneration = session.launchGeneration
+            let launchTarget = launcher.targetIdentity(for: request.action, returnTarget: returnTarget)
+            foregroundGuard.beginLaunch(generation: launchGeneration,
+                                        target: launchTarget,
+                                        at: now(),
+                                        isStillInitializing: { [launcher] target in
+                                            launcher.isTargetStillInitializing(target)
+                                        })
+            syncForegroundGuardRefreshTimer()
             hidePanel()
-            let completeLaunch: (String?) -> Void = { [weak self] error in
+            let completeLaunch: (LaunchTargetIdentity?, String?) -> Void = { [weak self] resolvedTarget, error in
                 guard let self else { return }
+                let timestamp = self.now()
                 let isCurrent = self.session.launchFinished(generation: launchGeneration, error: error)
+                let guardDecision = self.foregroundGuard.launchDidComplete(
+                    generation: launchGeneration,
+                    resolvedTarget: resolvedTarget,
+                    error: error,
+                    at: timestamp,
+                    isStillInitializing: { [launcher = self.launcher] target in
+                        launcher.isTargetStillInitializing(target)
+                    })
+                self.applyForegroundGuardDecision(guardDecision, at: timestamp)
+                self.syncForegroundGuardRefreshTimer()
                 if let error {
                     NSLog("Ring: %@", error)
                     if isCurrent && !self.session.isVisible {
@@ -734,17 +777,61 @@ final class AppCoordinator: NSObject, NSApplicationDelegate {
             }
             if case .systemAction(.lockScreen) = request.action {
                 recognizer.reset()
+                foregroundGuard.clearAll()
+                syncForegroundGuardRefreshTimer()
                 trigger?.hotKeyCancelled()
                 syncCombinationProbe()
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    self.launcher.open(request.action, completion: completeLaunch)
+                    self.launcher.launch(request.action, completion: completeLaunch)
                 }
                 return
             }
-            launcher.open(request.action, completion: completeLaunch)
+            launcher.launch(request.action, completion: completeLaunch)
         case .emptySlot, .busy, .ignored:
             hidePanel()
+        }
+    }
+
+    private func applyForegroundGuardDecision(_ decision: LaunchForegroundGuard.CompletionDecision,
+                                              at timestamp: TimeInterval) {
+        switch decision {
+        case .ensureCurrentTargetFrontmost(let target):
+            let frontmostIdentity = NSWorkspace.shared.frontmostApplication.map {
+                LaunchTargetIdentity(runningApp: RunningAppIdentity(runningApplication: $0))
+            }
+            if frontmostIdentity.map({ !target.matches($0) }) ?? true {
+                _ = launcher.activateTarget(target)
+            }
+        case .restoreIfFrontmost(let thief, let target):
+            guard let frontmost = NSWorkspace.shared.frontmostApplication else { return }
+            let frontIdentity = LaunchTargetIdentity(runningApp: RunningAppIdentity(runningApplication: frontmost))
+            guard thief.matches(frontIdentity) else { return }
+            let activated = launcher.activateTarget(target)
+            foregroundGuard.recordCorrectionAttempt(succeeded: activated, at: timestamp)
+        case .ignore:
+            break
+        }
+    }
+
+    private func syncForegroundGuardRefreshTimer() {
+        if foregroundGuard.isGuarding {
+            guard foregroundGuardRefreshTimer == nil else { return }
+            let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.foregroundGuard.refresh(at: self.now(), isStillInitializing: { [launcher = self.launcher] target in
+                    launcher.isTargetStillInitializing(target)
+                })
+                if !self.foregroundGuard.isGuarding {
+                    self.foregroundGuardRefreshTimer?.invalidate()
+                    self.foregroundGuardRefreshTimer = nil
+                }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            foregroundGuardRefreshTimer = timer
+        } else {
+            foregroundGuardRefreshTimer?.invalidate()
+            foregroundGuardRefreshTimer = nil
         }
     }
 
